@@ -1,6 +1,6 @@
 ﻿import { useEffect, useRef, useState } from "react";
 import { socket } from "../socket";
-import { getDeckCard, renderBackCard, renderCard } from "./deck";
+import { getDeckCard, preloadDeckAssets, renderBackCard, renderCard } from "./deck";
 
 function Mesa2v2({ roomId, gameState, onLeaveToRoomList }) {
   const [state, setState] = useState(gameState);
@@ -12,6 +12,10 @@ function Mesa2v2({ roomId, gameState, onLeaveToRoomList }) {
   const [showTestPanel, setShowTestPanel] = useState(false);
   const [passCardArmed, setPassCardArmed] = useState(false);
   const [pardaDraft, setPardaDraft] = useState([]);
+
+  useEffect(() => {
+    preloadDeckAssets();
+  }, []);
 
   useEffect(() => {
     setState(gameState);
@@ -1046,4 +1050,5 @@ function Mesa2v2({ roomId, gameState, onLeaveToRoomList }) {
 }
 
 export default Mesa2v2;
+
 
