@@ -1,4 +1,4 @@
-const cardDefs = require("../../shared/cards.json");
+﻿const cardDefs = require("../shared/cards.json");
 
 const deckMap = new Map(cardDefs.map((card) => [`${card.suit}-${card.value}`, card]));
 
@@ -27,3 +27,4 @@ function shuffle(deck) {
 }
 
 module.exports = { createDeck, shuffle, getCardRank };
+
