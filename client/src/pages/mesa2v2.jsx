@@ -476,7 +476,7 @@ function Mesa2v2({ roomId, gameState, onLeaveToRoomList }) {
 
   const renderPlayedStack = (cards, options = {}) => {
     const { fromNorth = false, rotateDeg = 0, stackAxis = "y", stackSign = 1 } = options;
-    const stackStep = 6;
+    const stackStep = 10;
     const stackCount = cards.length;
     const stackSize = (stackCount - 1) * stackStep;
     const stackStart =
@@ -1050,5 +1050,6 @@ function Mesa2v2({ roomId, gameState, onLeaveToRoomList }) {
 }
 
 export default Mesa2v2;
+
 
 

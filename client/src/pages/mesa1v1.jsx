@@ -401,7 +401,7 @@ function Mesa1v1({ roomId, gameState, onLeaveToRoomList }) {
 
   const renderPlayedStack = (cards, options = {}) => {
     const { fromNorth = false } = options;
-    const stackStep = 6;
+    const stackStep = 10;
 
     return (
       <div className="relative w-[78px]" style={{ height: `${76 + (cards.length - 1) * stackStep}px` }}>
@@ -904,5 +904,6 @@ function Mesa1v1({ roomId, gameState, onLeaveToRoomList }) {
 }
 
 export default Mesa1v1;
+
 
 
