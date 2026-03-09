@@ -42,13 +42,19 @@ const server = http.createServer(app);
 // TEMP (LAN testing): allow common private LAN ranges with any dev port (Vite may use 5173/5174/etc).
 const LAN_DEV_ORIGIN =
   /^http:\/\/(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})(:\d+)?$/;
+const VERCEL_ORIGIN = /^https:\/\/([a-zA-Z0-9-]+\.)*vercel\.app$/;
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "";
 
 const io = new Server(server, {
   cors: {
     // TEMP (remove after testing): relax CORS for LAN frontend testing from phone/tablet.
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
-      if (LAN_DEV_ORIGIN.test(origin)) {
+      if (
+        LAN_DEV_ORIGIN.test(origin) ||
+        VERCEL_ORIGIN.test(origin) ||
+        (FRONTEND_ORIGIN && origin === FRONTEND_ORIGIN)
+      ) {
         return callback(null, true);
       }
       return callback(new Error("Not allowed by CORS"));
@@ -2904,3 +2910,4 @@ io.on("connection", (socket) => {
 server.listen(3001, "0.0.0.0", () => {
   console.log("Servidor LAN en http://0.0.0.0:3001");
 });
+
