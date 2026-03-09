@@ -2906,8 +2906,8 @@ io.on("connection", (socket) => {
   });
 });
 
-// TEMP (remove after testing): bind to all interfaces so phones on same WiFi can connect.
-server.listen(3001, "0.0.0.0", () => {
-  console.log("Servidor LAN en http://0.0.0.0:3001");
+const PORT = Number(process.env.PORT) || 3001;
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`Servidor escuchando en http://0.0.0.0:${PORT}`);
 });
 
