@@ -140,9 +140,9 @@ function App() {
   const attemptJoinByUrl = (nameCandidate) => {
     const roomIdFromUrl = getRoomIdFromPathname();
     const cleanName = (nameCandidate || "").trim();
-    if (!connected || !roomIdFromUrl || !cleanName || gameState) return;
+    if (!connected || !roomIdFromUrl || !cleanName) return;
 
-    const attemptKey = `${roomIdFromUrl}:${cleanName}`;
+    const attemptKey = `${roomIdFromUrl}:${cleanName}:${socket.id || "no-socket"}`;
     if (autoJoinAttemptRef.current === attemptKey) return;
     autoJoinAttemptRef.current = attemptKey;
 
@@ -175,6 +175,7 @@ function App() {
 
     function onDisconnect() {
       setConnected(false);
+      autoJoinAttemptRef.current = "";
     }
 
     function onRoomsUpdate(updatedRooms) {

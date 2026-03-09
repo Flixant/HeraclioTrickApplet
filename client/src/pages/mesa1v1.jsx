@@ -28,9 +28,16 @@ function Mesa1v1({ roomId, gameState, onLeaveToRoomList }) {
   }, [gameState, roomId]);
 
   useEffect(() => {
-    function onGameUpdate(newState) {
-      stateRef.current = newState;
-      setState({ ...newState });
+    function onGameUpdate(payload) {
+      const payloadRoomId = payload?.roomId;
+      const nextState = payload?.gameState || payload;
+      if (!nextState) return;
+      if (payloadRoomId && payloadRoomId !== roomId) return;
+      const nextVersion = Number(nextState.stateVersion) || 0;
+      const currentVersion = Number(stateRef.current?.stateVersion) || 0;
+      if (nextVersion < currentVersion) return;
+      stateRef.current = nextState;
+      setState({ ...nextState });
     }
 
     function onServerMessage(msg) {
@@ -58,7 +65,7 @@ function Mesa1v1({ roomId, gameState, onLeaveToRoomList }) {
       socket.off("game:update", onGameUpdate);
       socket.off("server:message", onServerMessage);
     };
-  }, []);
+  }, [roomId]);
 
   if (!state) {
     return (

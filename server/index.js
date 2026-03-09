@@ -1,4 +1,4 @@
-﻿const express = require("express");
+const express = require("express");
 const http = require("http");
 const cors = require("cors");
 const { Server } = require("socket.io");
@@ -64,6 +64,12 @@ const io = new Server(server, {
 
 function emitRooms() {
   io.emit("rooms:update", getPublicRooms());
+}
+
+function emitGameUpdate(roomId, gameState) {
+  if (!roomId || !gameState) return;
+  gameState.stateVersion = (Number(gameState.stateVersion) || 0) + 1;
+  io.to(roomId).emit("game:update", { roomId, gameState });
 }
 
 const MESSAGE_LOCK_MS = 1700;
@@ -952,7 +958,7 @@ io.on("connection", (socket) => {
       emitLockedMessage(roomId, gameState, `${caller.name} canto ${CALL_LABELS[callType]}`);
     }
 
-    io.to(roomId).emit("game:update", gameState);
+    emitGameUpdate(roomId, gameState);
   }
 
   function scheduleRedeal(roomId, delayMs = 1800) {
@@ -963,7 +969,7 @@ io.on("connection", (socket) => {
 
       const starterId = getNextRoundStarterId(currentRoom.gameState);
       startGame.redealRound(currentRoom, starterId);
-      io.to(roomId).emit("game:update", currentRoom.gameState);
+      emitGameUpdate(roomId, currentRoom.gameState);
     }, delayMs);
   }
 
@@ -1112,7 +1118,7 @@ io.on("connection", (socket) => {
     }
 
     gameState.roundEnding = true;
-    io.to(roomId).emit("game:update", gameState);
+    emitGameUpdate(roomId, gameState);
     const sequenceDuration = emitMessageSequence(roomId, messageQueue);
     if (!matchWinnerId) {
       scheduleRedeal(roomId, Math.max(1800, sequenceDuration + 400));
@@ -1201,7 +1207,7 @@ io.on("connection", (socket) => {
     const playerIds = gameState.players.map((player) => player.id);
     if (gameState.currentHandCards.length < playerIds.length) {
       gameState.turn = getNextPlayerId(gameState, botId);
-      io.to(roomId).emit("game:update", gameState);
+      emitGameUpdate(roomId, gameState);
       return true;
     }
 
@@ -1237,14 +1243,14 @@ io.on("connection", (socket) => {
       gameState.pardaSelections = {};
       gameState.turn = handStarterId;
       emitLockedMessage(roomId, gameState, "Primera mano parda: el que salio primero elige debajo y arriba");
-      io.to(roomId).emit("game:update", gameState);
+      emitGameUpdate(roomId, gameState);
       return true;
     }
 
     if (!gameState.firstHandTie && !winnerId && currentHandNumber >= 2) {
       const firstHandWinnerId = gameState.handResults?.[0] || gameState.roundStarter || handStarterId;
       resolveRound(room, firstHandWinnerId, roomId);
-      io.to(roomId).emit("game:update", room.gameState);
+      emitGameUpdate(roomId, room.gameState);
       return true;
     }
 
@@ -1257,7 +1263,7 @@ io.on("connection", (socket) => {
           : (gameState.handWinsByPlayer[winnerId] || 0);
       if (roundWins >= 2) {
         resolveRound(room, winnerId, roomId);
-        io.to(roomId).emit("game:update", room.gameState);
+        emitGameUpdate(roomId, room.gameState);
         return true;
       }
     } else {
@@ -1291,12 +1297,12 @@ io.on("connection", (socket) => {
         }
       }
       resolveRound(room, finalWinnerId, roomId);
-      io.to(roomId).emit("game:update", room.gameState);
+      emitGameUpdate(roomId, room.gameState);
       return true;
     }
 
     gameState.handNumber += 1;
-    io.to(roomId).emit("game:update", gameState);
+    emitGameUpdate(roomId, gameState);
     return true;
   }
 
@@ -1342,7 +1348,7 @@ io.on("connection", (socket) => {
       emitLockedMessage(roomId, gameState, `${responder?.name || "Bot"} respondio Quiero al Flor Envido`);
       setBotCooldown(roomId, botId);
       botLog(roomId, responder?.name, "accept flor-envido");
-      io.to(roomId).emit("game:update", gameState);
+      emitGameUpdate(roomId, gameState);
       return;
     }
 
@@ -1391,7 +1397,7 @@ io.on("connection", (socket) => {
       }
       setBotCooldown(roomId, botId);
       botLog(roomId, responder?.name, "envido response", wantsAccept ? "quiero" : "no quiero", myEnvido);
-      io.to(roomId).emit("game:update", gameState);
+      emitGameUpdate(roomId, gameState);
       return;
     }
 
@@ -1437,7 +1443,7 @@ io.on("connection", (socket) => {
       }
       setBotCooldown(roomId, botId);
       botLog(roomId, botId, "truco response", wantsAccept ? "quiero" : "no quiero", maxRank, proposed);
-      io.to(roomId).emit("game:update", gameState);
+      emitGameUpdate(roomId, gameState);
       return;
     }
 
@@ -1469,12 +1475,12 @@ io.on("connection", (socket) => {
             `${me?.name || "Bot"} eligio debajo y arriba. Turno del rival para elegir.`
           );
           setBotCooldown(roomId, botId);
-          io.to(roomId).emit("game:update", gameState);
+          emitGameUpdate(roomId, gameState);
           return;
         }
         resolvePardaRound(room, roomId);
         setBotCooldown(roomId, botId);
-        io.to(roomId).emit("game:update", room.gameState);
+        emitGameUpdate(roomId, room.gameState);
       }
       return;
     }
@@ -1511,7 +1517,7 @@ io.on("connection", (socket) => {
       emitLockedMessage(roomId, gameState, `${me?.name || "Bot"} canto Flor`);
       setBotCooldown(roomId, botId);
       botLog(roomId, botId, "call flor");
-      io.to(roomId).emit("game:update", gameState);
+      emitGameUpdate(roomId, gameState);
       return;
     }
 
@@ -1541,7 +1547,7 @@ io.on("connection", (socket) => {
         emitLockedMessage(roomId, gameState, `${me?.name || "Bot"} canto Envido`);
         setBotCooldown(roomId, botId);
         botLog(roomId, botId, "call envido", myEnvido);
-        io.to(roomId).emit("game:update", gameState);
+        emitGameUpdate(roomId, gameState);
         return;
       }
     }
@@ -1567,7 +1573,7 @@ io.on("connection", (socket) => {
         emitLockedMessage(roomId, gameState, `${me?.name || "Bot"} canto Truco`);
         setBotCooldown(roomId, botId);
         botLog(roomId, botId, "call truco", maxRank);
-        io.to(roomId).emit("game:update", gameState);
+        emitGameUpdate(roomId, gameState);
         return;
       }
     }
@@ -1701,7 +1707,7 @@ io.on("connection", (socket) => {
         ? "Modo prueba activo: mazo solo de bastos y espadas"
         : "Modo prueba desactivado: mazo completo"
     );
-    io.to(roomId).emit("game:update", room.gameState);
+    emitGameUpdate(roomId, room.gameState);
   });
 
   socket.on("debug:redeal-round", ({ roomId }) => {
@@ -1715,7 +1721,7 @@ io.on("connection", (socket) => {
     startGame.redealRound(room, starterId);
 
     io.to(roomId).emit("server:message", "Repartiendo nueva ronda (modo prueba)");
-    io.to(roomId).emit("game:update", room.gameState);
+    emitGameUpdate(roomId, room.gameState);
   });
 
   socket.on("debug:force-flor", ({ roomId }) => {
@@ -1735,7 +1741,7 @@ io.on("connection", (socket) => {
 
     const me = gameState.players.find((p) => p.id === socket.id);
     io.to(roomId).emit("server:message", `${me?.name || "Jugador"} activo test de Flor`);
-    io.to(roomId).emit("game:update", gameState);
+    emitGameUpdate(roomId, gameState);
   });
 
   socket.on("debug:force-flor-reservada", ({ roomId }) => {
@@ -1755,7 +1761,7 @@ io.on("connection", (socket) => {
 
     const me = gameState.players.find((p) => p.id === socket.id);
     io.to(roomId).emit("server:message", `${me?.name || "Jugador"} activo test de Flor Reservada`);
-    io.to(roomId).emit("game:update", gameState);
+    emitGameUpdate(roomId, gameState);
   });
 
   socket.on("call:flor", ({ roomId }) => {
@@ -1827,7 +1833,7 @@ io.on("connection", (socket) => {
       ? `${caller?.name || "Jugador"} canto Flor y el rival no tiene Flor`
       : `${caller?.name || "Jugador"} canto Flor`;
     emitLockedMessage(roomId, gameState, msg);
-    io.to(roomId).emit("game:update", gameState);
+    emitGameUpdate(roomId, gameState);
   });
 
   socket.on("flor:jugar-ley", ({ roomId }) => {
@@ -1859,7 +1865,7 @@ io.on("connection", (socket) => {
     gameState.flor.leyByPlayer[socket.id] = true;
     const me = gameState.players.find((p) => p.id === socket.id);
     emitLockedMessage(roomId, gameState, `${me?.name || "Jugador"} juega a ley`);
-    io.to(roomId).emit("game:update", gameState);
+    emitGameUpdate(roomId, gameState);
   });
 
   socket.on("flor:con-flor", ({ roomId }) => {
@@ -1947,7 +1953,7 @@ io.on("connection", (socket) => {
         ? `${responder?.name || "Jugador"} respondio Con Flor. El Envido queda anulado en esta ronda`
         : `${responder?.name || "Jugador"} respondio Con Flor`
     );
-    io.to(roomId).emit("game:update", gameState);
+    emitGameUpdate(roomId, gameState);
   });
 
   socket.on("call:flor-envido", ({ roomId }) => {
@@ -1984,7 +1990,7 @@ io.on("connection", (socket) => {
 
     const me = gameState.players.find((p) => p.id === socket.id);
     emitLockedMessage(roomId, gameState, `${me?.name || "Jugador"} canto Flor Envido`);
-    io.to(roomId).emit("game:update", gameState);
+    emitGameUpdate(roomId, gameState);
   });
 
   socket.on("flor-envido:accept", ({ roomId }) => {
@@ -2010,7 +2016,7 @@ io.on("connection", (socket) => {
 
     const responder = gameState.players.find((p) => p.id === socket.id);
     emitLockedMessage(roomId, gameState, `${responder?.name || "Jugador"} respondio Quiero al Flor Envido`);
-    io.to(roomId).emit("game:update", gameState);
+    emitGameUpdate(roomId, gameState);
   });
 
   socket.on("flor-envido:reject", ({ roomId }) => {
@@ -2037,7 +2043,7 @@ io.on("connection", (socket) => {
 
     const responder = gameState.players.find((p) => p.id === socket.id);
     emitLockedMessage(roomId, gameState, `${responder?.name || "Jugador"} respondio No Quiero al Flor Envido`);
-    io.to(roomId).emit("game:update", gameState);
+    emitGameUpdate(roomId, gameState);
   });
 
   socket.on("flor-envido:raise", ({ roomId }) => {
@@ -2076,7 +2082,7 @@ io.on("connection", (socket) => {
       gameState,
       `${caller?.name || "Jugador"} respondio Quiero y Envido al Flor Envido. Ahora vale ${nextPoints}`
     );
-    io.to(roomId).emit("game:update", gameState);
+    emitGameUpdate(roomId, gameState);
   });
 
   socket.on("call:envido", ({ roomId }) => {
@@ -2143,7 +2149,7 @@ io.on("connection", (socket) => {
     const caller = gameState.players.find((p) => p.id === socket.id);
     emitLockedMessage(roomId, gameState, `${caller?.name || "Jugador"} canto Envido`);
 
-    io.to(roomId).emit("game:update", gameState);
+    emitGameUpdate(roomId, gameState);
   });
 
   socket.on("call:falta-envido", ({ roomId }) => {
@@ -2212,7 +2218,7 @@ io.on("connection", (socket) => {
       `${caller?.name || "Jugador"} canto Falta Envido (vale ${faltaPoints})`
     );
 
-    io.to(roomId).emit("game:update", gameState);
+    emitGameUpdate(roomId, gameState);
   });
 
   socket.on("call:primero-envido", ({ roomId }) => {
@@ -2282,7 +2288,7 @@ io.on("connection", (socket) => {
       gameState,
       `${caller?.name || "Jugador"} respondio Primero Envido. Se pausa el Truco y se responde el Envido.`
     );
-    io.to(roomId).emit("game:update", gameState);
+    emitGameUpdate(roomId, gameState);
   });
 
   socket.on("envido:accept", ({ roomId }) => {
@@ -2329,7 +2335,7 @@ io.on("connection", (socket) => {
     const responder = gameState.players.find((p) => p.id === socket.id);
     emitLockedMessage(roomId, gameState, `${responder?.name || "Jugador"} respondio Quiero al Envido.`);
 
-    io.to(roomId).emit("game:update", gameState);
+    emitGameUpdate(roomId, gameState);
   });
 
   socket.on("envido:reject", ({ roomId }) => {
@@ -2374,7 +2380,7 @@ io.on("connection", (socket) => {
       `${responder?.name || "Jugador"} respondio No Quiero al Envido. ${caller?.name || "Jugador"} queda con ${rejectPoints} de envido pendiente (se cobra al final de la ronda).`
     );
 
-    io.to(roomId).emit("game:update", gameState);
+    emitGameUpdate(roomId, gameState);
   });
 
   socket.on("envido:raise", ({ roomId, kind }) => {
@@ -2431,7 +2437,7 @@ io.on("connection", (socket) => {
         ? `${nextCaller?.name || "Jugador"} respondio Falta Envido. Ahora vale ${nextPoints}.`
         : `${nextCaller?.name || "Jugador"} respondio Quiero y Envido. Ahora vale ${nextPoints}.`
     );
-    io.to(roomId).emit("game:update", gameState);
+    emitGameUpdate(roomId, gameState);
   });
 
   socket.on("call:truco", ({ roomId }) => {
@@ -2484,7 +2490,7 @@ io.on("connection", (socket) => {
       `${responder?.name || "Jugador"} respondio Quiero al ${CALL_LABELS[truco.callType || "truco"]}`
     );
 
-    io.to(roomId).emit("game:update", gameState);
+    emitGameUpdate(roomId, gameState);
   });
 
   socket.on("truco:reject", ({ roomId }) => {
@@ -2515,7 +2521,7 @@ io.on("connection", (socket) => {
       `${responder?.name || "Jugador"} respondio No Quiero al ${CALL_LABELS[truco.callType || "truco"]}.`
     );
     resolveRound(room, trucoPointWinnerId, roomId);
-    io.to(roomId).emit("game:update", room.gameState);
+    emitGameUpdate(roomId, room.gameState);
   });
 
   socket.on("parda:select", ({ roomId, bottomIndex, topIndex }) => {
@@ -2579,7 +2585,7 @@ io.on("connection", (socket) => {
         gameState,
         `${me?.name || "Jugador"} eligio debajo y arriba. Turno del rival para elegir.`
       );
-      io.to(roomId).emit("game:update", gameState);
+      emitGameUpdate(roomId, gameState);
       return;
     }
 
@@ -2588,7 +2594,7 @@ io.on("connection", (socket) => {
       return;
     }
 
-    io.to(roomId).emit("game:update", room.gameState);
+    emitGameUpdate(roomId, room.gameState);
   });
 
   socket.on("play:card", ({ roomId, cardIndex, faceDown }) => {
@@ -2665,7 +2671,7 @@ io.on("connection", (socket) => {
 
     if (gameState.currentHandCards.length < playerIds.length) {
       gameState.turn = getNextPlayerId(gameState, socket.id);
-      io.to(roomId).emit("game:update", gameState);
+      emitGameUpdate(roomId, gameState);
       return;
     }
 
@@ -2705,7 +2711,7 @@ io.on("connection", (socket) => {
       gameState.pardaSelections = {};
       gameState.turn = handStarterId;
       emitLockedMessage(roomId, gameState, "Primera mano parda: el que salio primero elige debajo y arriba");
-      io.to(roomId).emit("game:update", gameState);
+      emitGameUpdate(roomId, gameState);
       return;
     }
 
@@ -2722,7 +2728,7 @@ io.on("connection", (socket) => {
     if (!gameState.firstHandTie && !winnerId && currentHandNumber >= 2) {
       const firstHandWinnerId = gameState.handResults?.[0] || gameState.roundStarter || handStarterId;
       resolveRound(room, firstHandWinnerId, roomId);
-      io.to(roomId).emit("game:update", room.gameState);
+      emitGameUpdate(roomId, room.gameState);
       return;
     }
 
@@ -2735,7 +2741,7 @@ io.on("connection", (socket) => {
           : (gameState.handWinsByPlayer[winnerId] || 0);
       if (roundWins >= 2) {
         resolveRound(room, winnerId, roomId);
-        io.to(roomId).emit("game:update", room.gameState);
+        emitGameUpdate(roomId, room.gameState);
         return;
       }
     } else {
@@ -2769,7 +2775,7 @@ io.on("connection", (socket) => {
         }
       }
       resolveRound(room, finalWinnerId, roomId);
-      io.to(roomId).emit("game:update", room.gameState);
+      emitGameUpdate(roomId, room.gameState);
       return;
     }
 
@@ -2795,7 +2801,7 @@ io.on("connection", (socket) => {
     }
 
     gameState.handNumber += 1;
-    io.to(roomId).emit("game:update", gameState);
+    emitGameUpdate(roomId, gameState);
   });
 
   socket.on("match:decision", ({ roomId, decision }) => {
@@ -2814,7 +2820,7 @@ io.on("connection", (socket) => {
     if (!seatedIds.includes(socket.id)) return;
 
     gameState.rematch.decisionsByPlayer[socket.id] = safeDecision;
-    io.to(roomId).emit("game:update", gameState);
+    emitGameUpdate(roomId, gameState);
 
     const decisions = Object.values(gameState.rematch.decisionsByPlayer || {});
     const everyoneAnswered = decisions.length > 0 && decisions.every((v) => v === "replay" || v === "exit");
@@ -2832,7 +2838,7 @@ io.on("connection", (socket) => {
       startGame.redealRound(room, starterId);
       room.status = room.players.length === room.maxPlayers ? "full" : "waiting";
       io.to(roomId).emit("server:message", "Todos confirmaron: comienza una nueva partida");
-      io.to(roomId).emit("game:update", room.gameState);
+      emitGameUpdate(roomId, room.gameState);
       emitRooms();
       return;
     }
@@ -2910,4 +2916,5 @@ const PORT = Number(process.env.PORT) || 3001;
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Servidor escuchando en http://0.0.0.0:${PORT}`);
 });
+
 

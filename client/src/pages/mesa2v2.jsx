@@ -28,9 +28,16 @@ function Mesa2v2({ roomId, gameState, onLeaveToRoomList }) {
   }, [gameState, roomId]);
 
   useEffect(() => {
-    function onGameUpdate(newState) {
-      stateRef.current = newState;
-      setState({ ...newState });
+    function onGameUpdate(payload) {
+      const payloadRoomId = payload?.roomId;
+      const nextState = payload?.gameState || payload;
+      if (!nextState) return;
+      if (payloadRoomId && payloadRoomId !== roomId) return;
+      const nextVersion = Number(nextState.stateVersion) || 0;
+      const currentVersion = Number(stateRef.current?.stateVersion) || 0;
+      if (nextVersion < currentVersion) return;
+      stateRef.current = nextState;
+      setState({ ...nextState });
     }
 
     function onServerMessage(msg) {
@@ -58,7 +65,7 @@ function Mesa2v2({ roomId, gameState, onLeaveToRoomList }) {
       socket.off("game:update", onGameUpdate);
       socket.off("server:message", onServerMessage);
     };
-  }, []);
+  }, [roomId]);
 
   if (!state) {
     return (
@@ -476,7 +483,7 @@ function Mesa2v2({ roomId, gameState, onLeaveToRoomList }) {
 
   const renderPlayedStack = (cards, options = {}) => {
     const { fromNorth = false, rotateDeg = 0, stackAxis = "y", stackSign = 1 } = options;
-    const stackStep = 10;
+    const stackStep = 13;
     const stackCount = cards.length;
     const stackSize = (stackCount - 1) * stackStep;
     const stackStart =
@@ -1019,16 +1026,16 @@ function Mesa2v2({ roomId, gameState, onLeaveToRoomList }) {
                 {renderDeckCardOrFallback(state.vira)}
               </div>
 
-              <div className="absolute left-1/2 top-[10%] -translate-x-1/2">
+              <div className="absolute left-1/2 top-[4%] -translate-x-1/2">
                 {renderPlayedStack(opponentPlayedCards, { fromNorth: true })}
               </div>
-              <div className="absolute left-1/2 bottom-[10%] -translate-x-1/2">
+              <div className="absolute left-1/2 bottom-[4%] -translate-x-1/2">
                 {renderPlayedStack(myPlayedCards)}
               </div>
-              <div className="absolute left-[13%] top-1/2 -translate-y-1/2">
+              <div className="absolute left-[10%] top-1/2 -translate-y-1/2">
                 {renderPlayedStack(leftPlayedCards, { rotateDeg: 90, stackAxis: "x", stackSign: -1 })}
               </div>
-              <div className="absolute right-[13%] top-1/2 -translate-y-1/2">
+              <div className="absolute right-[10%] top-1/2 -translate-y-1/2">
                 {renderPlayedStack(rightPlayedCards, { rotateDeg: -90, stackAxis: "x", stackSign: 1 })}
               </div>
 
@@ -1050,6 +1057,5 @@ function Mesa2v2({ roomId, gameState, onLeaveToRoomList }) {
 }
 
 export default Mesa2v2;
-
 
 
