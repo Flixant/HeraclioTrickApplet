@@ -217,6 +217,7 @@ function App() {
   const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
   const autoJoinAttemptRef = useRef("");
   const pendingMatchUpdateRef = useRef(new Set());
+  const myPlayerIdRef = useRef(null);
 
   const currentProfile = profile || guestProfile;
   const isGuestMode = !!guestProfile;
@@ -331,6 +332,19 @@ function App() {
       });
     }
 
+    function onGameUpdate(payload) {
+      const payloadRoomId = payload?.roomId;
+      const nextState = payload?.gameState || payload;
+      if (!nextState) return;
+      if (payloadRoomId && roomId && payloadRoomId !== roomId) return;
+      setGameState((prev) => {
+        const prevVersion = Number(prev?.stateVersion) || 0;
+        const nextVersion = Number(nextState?.stateVersion) || 0;
+        if (nextVersion && prevVersion && nextVersion < prevVersion) return prev;
+        return nextState;
+      });
+    }
+
     function onReturnRoomList() {
       setGameState(null);
       setRoomId(null);
@@ -349,6 +363,7 @@ function App() {
     socket.on("disconnect", onDisconnect);
     socket.on("rooms:update", onRoomsUpdate);
     socket.on("game:start", onGameStart);
+    socket.on("game:update", onGameUpdate);
     socket.on("match:return-roomlist", onReturnRoomList);
 
     return () => {
@@ -356,9 +371,10 @@ function App() {
       socket.off("disconnect", onDisconnect);
       socket.off("rooms:update", onRoomsUpdate);
       socket.off("game:start", onGameStart);
+      socket.off("game:update", onGameUpdate);
       socket.off("match:return-roomlist", onReturnRoomList);
     };
-  }, [currentProfile?.profileId, effectivePlayerName, isGuestMode, reconnectToken]);
+  }, [currentProfile?.profileId, effectivePlayerName, isGuestMode, reconnectToken, roomId]);
 
   useEffect(() => {
     attemptJoinByUrl(effectivePlayerName);
@@ -397,6 +413,22 @@ function App() {
   }, [gameState]);
 
   useEffect(() => {
+    const players = Array.isArray(gameState?.players) ? gameState.players : [];
+    if (!players.length) return;
+    const meBySocket = players.find((p) => p.id === socket.id) || null;
+    const meByToken =
+      reconnectToken ? players.find((p) => p.reconnectToken === reconnectToken) || null : null;
+    const meByName =
+      effectivePlayerName
+        ? players.find((p) => String(p.name || "").trim() === effectivePlayerName.trim()) || null
+        : null;
+    const resolvedId = meBySocket?.id || meByToken?.id || meByName?.id || null;
+    if (resolvedId) {
+      myPlayerIdRef.current = resolvedId;
+    }
+  }, [effectivePlayerName, gameState, reconnectToken]);
+
+  useEffect(() => {
     if (!db || !authUser || !profile || !gameState?.matchEnded || !gameState?.matchWinnerId) return;
 
     const players = Array.isArray(gameState.players) ? gameState.players : [];
@@ -407,8 +439,11 @@ function App() {
       effectivePlayerName
         ? players.find((p) => String(p.name || "").trim() === effectivePlayerName.trim()) || null
         : null;
-    const myPlayerId = meBySocket?.id || meByToken?.id || meByName?.id || null;
-    if (!myPlayerId) return;
+    const myPlayerId = meBySocket?.id || meByToken?.id || meByName?.id || myPlayerIdRef.current || null;
+    if (!myPlayerId) {
+      console.warn("[W/L] No se pudo resolver myPlayerId al cierre de partida");
+      return;
+    }
 
     const fingerprint = buildMatchFingerprint(roomId, gameState);
     const counted = readCountedMatches();
@@ -421,11 +456,15 @@ function App() {
         : myPlayerId === gameState.matchWinnerId;
 
     const profileRef = doc(db, "players", authUser.uid);
-    updateDoc(profileRef, {
-      wins: increment(iWon ? 1 : 0),
-      losses: increment(iWon ? 0 : 1),
-      updatedAt: serverTimestamp(),
-    })
+    setDoc(
+      profileRef,
+      {
+        wins: increment(iWon ? 1 : 0),
+        losses: increment(iWon ? 0 : 1),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    )
       .then(() => {
         setProfile((prev) => {
           if (!prev) return prev;
