@@ -2130,7 +2130,7 @@ io.on("connection", (socket) => {
           declareIndex: nextDeclareIndex >= 0 ? nextDeclareIndex : declareOrder.length,
         };
         const me = gameState.players.find((p) => p.id === botId);
-        emitLockedMessage(roomId, gameState, `${me?.name || "Bot"}: Tengo ${envite}`);
+        emitLockedMessage(roomId, gameState, `${me?.name || "Bot"}: Tengo ${envite} puntos de envite`);
         if (nextDeclareIndex >= 0) {
           gameState.turn = declareOrder[nextDeclareIndex];
           setBotCooldown(roomId, botId);
@@ -2179,6 +2179,11 @@ io.on("connection", (socket) => {
         const responderId = getOpposingResponderId(gameState, botId);
         if (responderId) {
           gameState.canto11 = { ...canto11, status: "resolved" };
+          addPoints(gameState, botId, 1);
+          const privoWinnerLabel = getWinnerLabel(gameState, botId);
+          const privoTotal = getTotalPoints(gameState, botId);
+          emitLockedMessage(roomId, gameState, `${privoWinnerLabel} suma 1 punto de envite por Privo (total ${privoTotal})`);
+
           gameState.truco = {
             status: "pending",
             callerId: botId,
@@ -3537,7 +3542,7 @@ io.on("connection", (socket) => {
     };
 
     const me = gameState.players.find((p) => p.id === socket.id);
-    emitLockedMessage(roomId, gameState, `${me?.name || "Jugador"}: Tengo ${envite}`);
+    emitLockedMessage(roomId, gameState, `${me?.name || "Jugador"}: Tengo ${envite} puntos de envite`);
 
     if (nextDeclareIndex >= 0) {
       gameState.turn = declareOrder[nextDeclareIndex];
@@ -3600,6 +3605,11 @@ io.on("connection", (socket) => {
       ...canto11,
       status: "resolved",
     };
+
+    addPoints(gameState, socket.id, 1);
+    const privoWinnerLabel = getWinnerLabel(gameState, socket.id);
+    const privoTotal = getTotalPoints(gameState, socket.id);
+    emitLockedMessage(roomId, gameState, `${privoWinnerLabel} suma 1 punto de envite por Privo (total ${privoTotal})`);
 
     const responderId = getOpposingResponderId(gameState, socket.id);
     const responder = gameState.players.find((p) => p.id === responderId);
