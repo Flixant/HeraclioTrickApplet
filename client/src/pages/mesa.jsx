@@ -3,6 +3,43 @@ import { socket } from "../socket";
 import { getDeckCard, preloadDeckAssets, renderBackCard, renderCard } from "./deck";
 import { resolveMyPlayerId } from "../utils/playerIdentity";
 
+function simplifyPlayerActionMessage(rawMessage) {
+  if (typeof rawMessage !== "string") return rawMessage;
+  const message = rawMessage.trim();
+  if (!message) return rawMessage;
+
+  const verbPattern = "(canto|canta|respondio|responde|juega|jugo|activo|activa)";
+  const withColon = message.match(new RegExp(`^([^:]+):\\s*${verbPattern}\\s*:?\\s*(.+)$`, "i"));
+  if (withColon) {
+    const [, rawPlayer, rest] = withColon;
+    const player = rawPlayer.trim();
+    if (player && rest?.trim()) return `${player}: ${rest.trim()}`;
+  }
+
+  const withoutColon = message.match(new RegExp(`^([^:]+?)\\s+${verbPattern}\\s*:?\\s*(.+)$`, "i"));
+  if (withoutColon) {
+    const [, rawPlayer, rest] = withoutColon;
+    const player = rawPlayer.trim();
+    if (player && rest?.trim()) return `${player}: ${rest.trim()}`;
+  }
+
+  const seFueWithColon = message.match(/^([^:]+):\s*se fue\s*:?\s*(.+)$/i);
+  if (seFueWithColon) {
+    const [, rawPlayer, rest] = seFueWithColon;
+    const player = rawPlayer.trim();
+    if (player && rest?.trim()) return `${player}: ${rest.trim()}`;
+  }
+
+  const seFueWithoutColon = message.match(/^([^:]+?)\s+se fue\s*:?\s*(.+)$/i);
+  if (seFueWithoutColon) {
+    const [, rawPlayer, rest] = seFueWithoutColon;
+    const player = rawPlayer.trim();
+    if (player && rest?.trim()) return `${player}: ${rest.trim()}`;
+  }
+
+  return rawMessage;
+}
+
 function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
   const [state, setState] = useState(gameState);
   const stateRef = useRef(gameState);
@@ -35,6 +72,9 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
   useEffect(() => {
     setState(gameState);
     stateRef.current = gameState;
+  }, [gameState]);
+
+  useEffect(() => {
     setMessage("");
     setShowEnvidoStoneSlider(false);
     setRemoteAvatarLoadFailed({});
@@ -42,7 +82,7 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
       clearTimeout(messageTimeoutRef.current);
       messageTimeoutRef.current = null;
     }
-  }, [gameState, roomId]);
+  }, [roomId]);
 
   useEffect(() => {
     function onGameUpdate(payload) {
@@ -58,6 +98,7 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
     }
 
     function onServerMessage(msg) {
+      const normalizedMsg = simplifyPlayerActionMessage(msg);
       const isMatchEndMessage = /gana la partida|llego a 12|alcanza a 12/i.test(String(msg || ""));
       if (isMatchEndMessage && !stateRef.current?.matchEnded) {
         return;
@@ -65,7 +106,7 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
       if (messageTimeoutRef.current) {
         clearTimeout(messageTimeoutRef.current);
       }
-      setMessage(msg);
+      setMessage(normalizedMsg);
       messageTimeoutRef.current = setTimeout(() => {
         setMessage("");
         messageTimeoutRef.current = null;
