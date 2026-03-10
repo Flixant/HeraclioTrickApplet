@@ -572,12 +572,34 @@ function isInputLocked(gameState) {
   return (gameState?.inputLockedUntil || 0) > Date.now();
 }
 
+function normalizePlayerActionMessage(message) {
+  if (typeof message !== "string") return message;
+  const trimmed = message.trim();
+  if (!trimmed) return message;
+  const verbPattern = "(canto|canta|respondio|responde|juega|jugo)";
+  const withColon = trimmed.match(new RegExp(`^([^:]+):\\s*${verbPattern}\\s+(.+)$`, "i"));
+  if (withColon) {
+    const [, rawPlayer, rest] = withColon;
+    const player = rawPlayer.trim();
+    if (player && rest?.trim()) return `${player}: ${rest.trim()}`;
+  }
+
+  const withoutColon = trimmed.match(new RegExp(`^([^:]+?)\\s+${verbPattern}\\s+(.+)$`, "i"));
+  if (withoutColon) {
+    const [, rawPlayer, rest] = withoutColon;
+    const player = rawPlayer.trim();
+    if (player && rest?.trim()) return `${player}: ${rest.trim()}`;
+  }
+
+  return message;
+}
+
 function emitLockedMessage(roomId, gameState, message, lockMs = MESSAGE_LOCK_MS) {
   if (gameState) {
     const nextUnlock = Date.now() + lockMs;
     gameState.inputLockedUntil = Math.max(gameState.inputLockedUntil || 0, nextUnlock);
   }
-  io.to(roomId).emit("server:message", message);
+  io.to(roomId).emit("server:message", normalizePlayerActionMessage(message));
 }
 
 const CALL_LABELS = {
@@ -1015,7 +1037,7 @@ io.on("connection", (socket) => {
     const timers = [];
     messages.forEach((message, index) => {
       const timer = setTimeout(() => {
-        io.to(roomId).emit("server:message", message);
+        io.to(roomId).emit("server:message", normalizePlayerActionMessage(message));
       }, index * stepMs);
       timers.push(timer);
     });
@@ -2240,7 +2262,7 @@ io.on("connection", (socket) => {
     if (Date.now() - lastAt < TEAM_SIGNAL_COOLDOWN_MS) return;
     teamSignalCooldownByPlayer.set(cooldownKey, Date.now());
 
-    io.to(roomId).emit("server:message", `${me.name || "Jugador"} canta: ${label}`);
+    io.to(roomId).emit("server:message", `${me.name || "Jugador"}: ${label}`);
   });
 
   socket.on("call:flor", ({ roomId }) => {
