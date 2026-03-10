@@ -190,6 +190,8 @@ function startGame(room) {
     matchEndedAt: null,
     rematch: null,
     inputLockedUntil: 0,
+    uiMessage: "",
+    uiMessageUntil: 0,
     roundPointValue: 1,
     truco: {
       status: "idle",
@@ -281,6 +283,8 @@ function redealRound(room, starterId) {
   gameState.matchEndedAt = null;
   gameState.rematch = null;
   gameState.inputLockedUntil = 0;
+  gameState.uiMessage = "";
+  gameState.uiMessageUntil = 0;
   gameState.roundPointValue = 1;
   gameState.truco = {
     status: "idle",
