@@ -654,7 +654,7 @@ function computeFaltaEnvidoPoints(gameState = {}) {
 
 function isCanto11Active(gameState) {
   const status = gameState?.canto11?.status || "idle";
-  return status === "declaring" || status === "responding";
+  return status === "declaring" || status === "responding" || status === "duel_declaring";
 }
 
 function getTeamIdsByKey(gameState, teamKey) {
@@ -722,6 +722,63 @@ function resolveCanto11ByFlorIfNeeded(roomId, room, gameState) {
   return true;
 }
 
+function resolveCanto11Duel(roomId, room, gameState) {
+  const canto11 = gameState?.canto11 || {};
+  const flor = gameState?.flor || {};
+  const snapshot = gameState?.roundHandsSnapshot || gameState?.hands || {};
+  const declareOrder = Array.isArray(canto11.declareOrder) ? canto11.declareOrder : [];
+  if (!declareOrder.length) return false;
+
+  const florCandidateIds = declareOrder.filter(
+    (id) => !!flor.hasFlorByPlayer?.[id] && !flor.burnedByPlayer?.[id]
+  );
+
+  let winnerId = null;
+  let reason = "";
+  if (florCandidateIds.length > 0) {
+    const scoreByPlayer = {};
+    for (const id of florCandidateIds) {
+      scoreByPlayer[id] = computeFlorValue(snapshot[id] || [], gameState.vira);
+    }
+    winnerId = resolveScoreWinnerByTeam(gameState, scoreByPlayer, florCandidateIds);
+    reason = "por flor";
+  } else {
+    const declared = canto11.declaredByPlayer || {};
+    const scoreByPlayer = {};
+    for (const id of declareOrder) {
+      scoreByPlayer[id] = Number(declared[id]) || 0;
+    }
+    winnerId = resolveScoreWinnerByTeam(gameState, scoreByPlayer, declareOrder);
+    reason = "por envido";
+  }
+
+  if (!winnerId) return false;
+
+  addPoints(gameState, winnerId, 1);
+  gameState.canto11 = { ...canto11, status: "resolved" };
+  const winnerLabel = getWinnerLabel(gameState, winnerId);
+  const total = getTotalPoints(gameState, winnerId);
+  emitLockedMessage(roomId, gameState, `${winnerLabel} gana cantando a cantando ${reason}`);
+  emitLockedMessage(roomId, gameState, `${winnerLabel} suma 1 punto (total ${total})`);
+
+  const matchWinnerId = getMatchWinnerId(gameState);
+  if (matchWinnerId) {
+    const championLabel = getWinnerLabel(gameState, matchWinnerId);
+    emitLockedMessage(roomId, gameState, `${championLabel} gana la partida`);
+    gameState.matchEnded = true;
+    gameState.matchWinnerId = matchWinnerId;
+    gameState.matchEndedAt = Date.now();
+    gameState.rematch = buildRematchState(gameState);
+    if (room) {
+      room.status = "finished";
+      emitRooms();
+    }
+  }
+
+  emitGameUpdate(roomId, gameState);
+  return true;
+}
+
 function activateCanto11IfNeeded(gameState) {
   if (!gameState || gameState.matchEnded) return false;
   if ((gameState.tableCards || []).length > 0) return false;
@@ -738,6 +795,26 @@ function activateCanto11IfNeeded(gameState) {
   } else if (t2 === 11 && t1 !== 11) {
     singingTeamKey = "team2";
     responderTeamKey = "team1";
+  } else if (t1 === 11 && t2 === 11) {
+    const declareOrder = getTurnOrder(
+      gameState,
+      gameState.roundStarter || gameState.turn || gameState.players?.[0]?.id
+    );
+    if (!declareOrder.length) return false;
+    gameState.canto11 = {
+      status: "duel_declaring",
+      singingTeamKey: null,
+      responderTeamKey: null,
+      declareOrder,
+      declareIndex: 0,
+      declaredByPlayer: {},
+      singingMaxEnvite: 0,
+      responderMaxEnvite: 0,
+      responderEligible: false,
+      responderTurnId: null,
+    };
+    gameState.turn = declareOrder[0];
+    return true;
   } else {
     gameState.canto11 = {
       status: "idle",
@@ -2166,10 +2243,11 @@ io.on("connection", (socket) => {
     if (pendingFlorEnvido) return;
 
     const canto11 = gameState.canto11 || {};
-    if (canto11.status === "declaring" && isBotPlayerId(gameState.turn)) {
+    if ((canto11.status === "declaring" || canto11.status === "duel_declaring") && isBotPlayerId(gameState.turn)) {
       const botId = gameState.turn;
       if (!canBotActNow(roomId, botId)) return;
-      if (getPlayerTeamKey(gameState, botId) === canto11.singingTeamKey) {
+      const isDuelDeclaring = canto11.status === "duel_declaring";
+      if (isDuelDeclaring || getPlayerTeamKey(gameState, botId) === canto11.singingTeamKey) {
         const snapshot = gameState.roundHandsSnapshot || gameState.hands || {};
         const envite = computeEnvido(snapshot[botId] || [], gameState.vira);
         const declaredByPlayer = { ...(canto11.declaredByPlayer || {}), [botId]: envite };
@@ -2190,10 +2268,29 @@ io.on("connection", (socket) => {
             ? `${me?.name || "Bot"}: Tengo Flor`
             : `${me?.name || "Bot"}: Tengo ${envite} puntos de envite`
         );
+        const cardsToReveal = snapshot[botId] || gameState.hands?.[botId] || [];
+        const now = Date.now();
+        gameState.tableCards = [
+          ...(gameState.tableCards || []),
+          ...cardsToReveal.map((card, index) => ({
+            playerId: botId,
+            card,
+            handNumber: 1,
+            isParda: false,
+            rank: resolveHandRank(card, gameState.vira),
+            playedAt: now + index,
+          })),
+        ];
         if (nextDeclareIndex >= 0) {
           gameState.turn = declareOrder[nextDeclareIndex];
           setBotCooldown(roomId, botId);
           emitGameUpdate(roomId, gameState);
+          return;
+        }
+
+        if (isDuelDeclaring) {
+          resolveCanto11Duel(roomId, room, gameState);
+          setBotCooldown(roomId, botId);
           return;
         }
 
@@ -2832,16 +2929,17 @@ io.on("connection", (socket) => {
     const gameState = room.gameState;
     if (gameState.mode === "2vs2") {
       ensureScoreState(gameState);
-      const teamField = getScoreTeamField(gameState, socket.id);
-      if (!teamField) return;
-      gameState.score[teamField] = 11;
+      gameState.score.team1 = 11;
+      gameState.score.team2 = 11;
     } else {
-      gameState.pointsByPlayer[socket.id] = 11;
+      for (const player of gameState.players || []) {
+        gameState.pointsByPlayer[player.id] = 11;
+      }
     }
 
     activateCanto11IfNeeded(gameState);
     const me = gameState.players.find((p) => p.id === socket.id);
-    io.to(roomId).emit("server:message", `${me?.name || "Jugador"} activo test: mi equipo en 11`);
+    io.to(roomId).emit("server:message", `${me?.name || "Jugador"} activo test: ambos en 11`);
     emitGameUpdate(roomId, gameState);
   });
 
@@ -3617,13 +3715,16 @@ io.on("connection", (socket) => {
 
     const gameState = room.gameState;
     const canto11 = gameState.canto11 || {};
-    if (canto11.status !== "declaring") return;
+    const isDuelDeclaring = canto11.status === "duel_declaring";
+    if (canto11.status !== "declaring" && !isDuelDeclaring) return;
 
-    const singingTeamKey = canto11.singingTeamKey;
-    if (!singingTeamKey) return;
-    if (getPlayerTeamKey(gameState, socket.id) !== singingTeamKey) {
-      socket.emit("server:message", "No te corresponde declarar envite");
-      return;
+    if (!isDuelDeclaring) {
+      const singingTeamKey = canto11.singingTeamKey;
+      if (!singingTeamKey) return;
+      if (getPlayerTeamKey(gameState, socket.id) !== singingTeamKey) {
+        socket.emit("server:message", "No te corresponde declarar envite");
+        return;
+      }
     }
     if (gameState.turn !== socket.id) {
       socket.emit("server:message", "Debe declararse en orden");
@@ -3642,6 +3743,20 @@ io.on("connection", (socket) => {
       declareIndex: nextDeclareIndex >= 0 ? nextDeclareIndex : declareOrder.length,
     };
 
+    const cardsToReveal = snapshot[socket.id] || gameState.hands?.[socket.id] || [];
+    const now = Date.now();
+    gameState.tableCards = [
+      ...(gameState.tableCards || []),
+      ...cardsToReveal.map((card, index) => ({
+        playerId: socket.id,
+        card,
+        handNumber: 1,
+        isParda: false,
+        rank: resolveHandRank(card, gameState.vira),
+        playedAt: now + index,
+      })),
+    ];
+
     const me = gameState.players.find((p) => p.id === socket.id);
     const singerHasFlor =
       !!gameState.flor?.hasFlorByPlayer?.[socket.id] && !gameState.flor?.burnedByPlayer?.[socket.id];
@@ -3656,6 +3771,11 @@ io.on("connection", (socket) => {
     if (nextDeclareIndex >= 0) {
       gameState.turn = declareOrder[nextDeclareIndex];
       emitGameUpdate(roomId, gameState);
+      return;
+    }
+
+    if (isDuelDeclaring) {
+      resolveCanto11Duel(roomId, room, gameState);
       return;
     }
 

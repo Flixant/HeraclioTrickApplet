@@ -395,14 +395,17 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
     Object.values(state.handWinsByPlayer || {}).every((wins) => wins === 0) &&
     (state.tableCards?.length || 0) < playerIds.length;
   const canto11 = state.canto11 || { status: "idle" };
-  const isCanto11Declaring = canto11.status === "declaring";
+  const isCanto11DuelDeclaring = canto11.status === "duel_declaring";
+  const isCanto11Declaring = canto11.status === "declaring" || isCanto11DuelDeclaring;
   const isCanto11Responding = canto11.status === "responding";
   const isCanto11Active = isCanto11Declaring || isCanto11Responding;
   const myTeamKey = getPlayerTeamKeyFromTeams(state.teams, myPlayerId, state.players);
   const isCanto11SingerTeam = !!myTeamKey && myTeamKey === canto11.singingTeamKey;
   const isCanto11ResponderTeam = !!myTeamKey && myTeamKey === canto11.responderTeamKey;
   const canto11ResponderTurnId = canto11.responderTurnId || state.turn;
-  const canDeclareCanto11Envite = isCanto11Declaring && isCanto11SingerTeam && state.turn === myPlayerId;
+  const canDeclareCanto11Envite = isCanto11DuelDeclaring
+    ? state.turn === myPlayerId
+    : isCanto11Declaring && isCanto11SingerTeam && state.turn === myPlayerId;
   const canRespondCanto11 = isCanto11Responding && isCanto11ResponderTeam && (
     canto11ResponderTurnId === myPlayerId || isSameTeamByState(canto11ResponderTurnId, myPlayerId)
   );
@@ -1116,7 +1119,7 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
                 onClick={setMyTeamScore11}
                 className="w-full rounded-full bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-800"
               >
-                Mi equipo en 11
+                Ambos en 11
               </button>
             </div>
           </div>
