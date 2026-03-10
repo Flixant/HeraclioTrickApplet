@@ -221,6 +221,7 @@ function App() {
   const autoJoinAttemptRef = useRef("");
   const pendingMatchUpdateRef = useRef(new Set());
   const myPlayerIdRef = useRef(null);
+  const suppressAutoJoinUntilRef = useRef(0);
 
   const currentProfile = profile || guestProfile;
   const isGuestMode = !!guestProfile;
@@ -235,12 +236,17 @@ function App() {
     setAvatarLoadFailed(false);
   }, [avatarUrl]);
 
-  const attemptJoinByUrl = (nameCandidate) => {
+  const attemptJoinByUrl = (nameCandidate, avatarCandidate = "") => {
+    if (Date.now() < suppressAutoJoinUntilRef.current) return;
     const roomIdFromUrl = getRoomIdFromPathname();
     const cleanName = (nameCandidate || "").trim();
+    const cleanAvatar =
+      typeof avatarCandidate === "string" && /^https?:\/\//i.test(avatarCandidate.trim())
+        ? avatarCandidate.trim()
+        : "";
     if (!connected || !roomIdFromUrl || !cleanName) return;
 
-    const attemptKey = `${roomIdFromUrl}:${cleanName}:${socket.id || "no-socket"}`;
+    const attemptKey = `${roomIdFromUrl}:${cleanName}:${cleanAvatar}:${socket.id || "no-socket"}`;
     if (autoJoinAttemptRef.current === attemptKey) return;
     autoJoinAttemptRef.current = attemptKey;
 
@@ -257,6 +263,7 @@ function App() {
       roomId: roomIdFromUrl,
       playerName: cleanName,
       reconnectToken,
+      avatarUrl: cleanAvatar,
     });
   };
 
@@ -309,7 +316,7 @@ function App() {
       const roomIdFromUrl = getRoomIdFromPathname();
       if (roomIdFromUrl && reconnectToken) {
         const preferredName = (effectivePlayerName || saved?.playerName || "").trim();
-        attemptJoinByUrl(preferredName);
+        attemptJoinByUrl(preferredName, avatarUrl);
       }
     }
 
@@ -339,7 +346,7 @@ function App() {
       const payloadRoomId = payload?.roomId;
       const nextState = payload?.gameState || payload;
       if (!nextState) return;
-      if (payloadRoomId && roomId && payloadRoomId !== roomId) return;
+      if (payloadRoomId && (!roomId || payloadRoomId !== roomId)) return;
       setGameState((prev) => {
         const prevVersion = Number(prev?.stateVersion) || 0;
         const nextVersion = Number(nextState?.stateVersion) || 0;
@@ -349,8 +356,10 @@ function App() {
     }
 
     function onReturnRoomList() {
+      suppressAutoJoinUntilRef.current = Date.now() + 4000;
       setGameState(null);
       setRoomId(null);
+      window.history.replaceState({}, "", "/");
       writeStoredSession({
         ...readStoredSession(),
         isGuest: isGuestMode,
@@ -377,11 +386,11 @@ function App() {
       socket.off("game:update", onGameUpdate);
       socket.off("match:return-roomlist", onReturnRoomList);
     };
-  }, [currentProfile?.profileId, effectivePlayerName, isGuestMode, reconnectToken, roomId]);
+  }, [avatarUrl, currentProfile?.profileId, effectivePlayerName, isGuestMode, reconnectToken, roomId]);
 
   useEffect(() => {
-    attemptJoinByUrl(effectivePlayerName);
-  }, [effectivePlayerName, connected, gameState]);
+    attemptJoinByUrl(effectivePlayerName, avatarUrl);
+  }, [avatarUrl, effectivePlayerName, connected, gameState]);
 
   useEffect(() => {
     writeStoredSession({
@@ -452,6 +461,8 @@ function App() {
     const counted = readCountedMatches();
     if (counted.includes(fingerprint) || pendingMatchUpdateRef.current.has(fingerprint)) return;
     pendingMatchUpdateRef.current.add(fingerprint);
+    const nextCounted = [...counted, fingerprint].slice(-20);
+    writeCountedMatches(nextCounted);
 
     const iWon =
       gameState.mode === "2vs2"
@@ -477,8 +488,6 @@ function App() {
             losses: Number(prev.losses || 0) + (iWon ? 0 : 1),
           };
         });
-        const nextCounted = [...counted, fingerprint].slice(-20);
-        writeCountedMatches(nextCounted);
         pendingMatchUpdateRef.current.delete(fingerprint);
       })
       .catch((error) => {
@@ -502,10 +511,14 @@ function App() {
       roomId: nextRoomId,
       playerName: effectivePlayerName,
       reconnectToken,
+      avatarUrl,
     });
   };
 
   const leaveToRoomList = () => {
+    suppressAutoJoinUntilRef.current = Date.now() + 4000;
+    autoJoinAttemptRef.current = "";
+    window.history.replaceState({}, "", "/");
     if (roomId) {
       socket.emit("room:leave");
     }

@@ -128,7 +128,7 @@ function replacePlayerIdDeep(node, oldId, newId, seen = new WeakMap()) {
   return nextObj;
 }
 
-function reclaimDisconnectedSeat(room, socket, nextPlayerName, reconnectToken) {
+function reclaimDisconnectedSeat(room, socket, nextPlayerName, reconnectToken, nextAvatarUrl = "") {
   if (!room || !room.gameState || !reconnectToken) return false;
   const disconnected = room.players.find(
     (p) => p.reconnectToken === reconnectToken && p.connected === false
@@ -142,6 +142,7 @@ function reclaimDisconnectedSeat(room, socket, nextPlayerName, reconnectToken) {
   disconnected.lastSeenAt = Date.now();
   disconnected.name = nextPlayerName || disconnected.name;
   disconnected.reconnectToken = reconnectToken;
+  disconnected.avatarUrl = nextAvatarUrl || disconnected.avatarUrl || "";
   clearSeatTimeout(room.id, oldId);
 
   room.gameState = replacePlayerIdDeep(room.gameState, oldId, newId);
@@ -2099,9 +2100,13 @@ io.on("connection", (socket) => {
 
   startBotLoopOnce();
 
-  socket.on("room:join", ({ roomId, playerName, reconnectToken }) => {
+  socket.on("room:join", ({ roomId, playerName, reconnectToken, avatarUrl }) => {
     const currentRoom = socket.data.roomId;
     const nextName = (playerName || "Jugador").trim() || "Jugador";
+    const nextAvatarUrl =
+      typeof avatarUrl === "string" && /^https?:\/\//i.test(avatarUrl.trim())
+        ? avatarUrl.trim()
+        : "";
 
     if (currentRoom && currentRoom !== roomId) {
       const oldRoom = removePlayer(currentRoom, socket.id);
@@ -2122,7 +2127,8 @@ io.on("connection", (socket) => {
       targetRoom,
       socket,
       nextName,
-      reconnectToken
+      reconnectToken,
+      nextAvatarUrl
     );
     if (reclaimed) {
       socket.join(roomId);
@@ -2141,6 +2147,7 @@ io.on("connection", (socket) => {
       id: socket.id,
       name: nextName,
       reconnectToken: reconnectToken || null,
+      avatarUrl: nextAvatarUrl,
       connected: true,
       lastSeenAt: Date.now(),
     });

@@ -107,8 +107,13 @@ function addPlayer(roomId, player) {
   const room = rooms[roomId];
   if (!room) return { ok: false, error: "Room no existe" };
 
-  const alreadyInRoom = room.players.some((existing) => existing.id === player.id);
-  if (alreadyInRoom) {
+  const existingPlayer = room.players.find((existing) => existing.id === player.id);
+  if (existingPlayer) {
+    existingPlayer.name = player.name || existingPlayer.name;
+    existingPlayer.reconnectToken = player.reconnectToken || existingPlayer.reconnectToken || null;
+    existingPlayer.connected = typeof player.connected === "boolean" ? player.connected : existingPlayer.connected;
+    existingPlayer.lastSeenAt = player.lastSeenAt || Date.now();
+    existingPlayer.avatarUrl = player.avatarUrl || "";
     return { ok: true, room };
   }
 

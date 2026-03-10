@@ -15,6 +15,7 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
   const [showEnvidoStoneSlider, setShowEnvidoStoneSlider] = useState(false);
   const [envidoStoneRaise, setEnvidoStoneRaise] = useState(2);
   const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
+  const [remoteAvatarLoadFailed, setRemoteAvatarLoadFailed] = useState({});
 
   const safeAvatarUrl =
     typeof myAvatarUrl === "string" && /^https?:\/\//i.test(myAvatarUrl.trim())
@@ -34,6 +35,7 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
     stateRef.current = gameState;
     setMessage("");
     setShowEnvidoStoneSlider(false);
+    setRemoteAvatarLoadFailed({});
     if (messageTimeoutRef.current) {
       clearTimeout(messageTimeoutRef.current);
       messageTimeoutRef.current = null;
@@ -323,6 +325,37 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
     (!nextCall.requiresAcceptedBy || acceptedByMyTeam);
 
   const me = state.players.find((p) => p.id === myPlayerId);
+  const getPlayerAvatarUrl = (player) => {
+    const raw = player?.avatarUrl;
+    return typeof raw === "string" && /^https?:\/\//i.test(raw.trim()) ? raw.trim() : "";
+  };
+  const renderSeatAvatar = (player, fallback = "J", sizeClass = "h-9 w-9 text-sm") => {
+    const playerId = player?.id || fallback;
+    const avatar = getPlayerAvatarUrl(player);
+    const failed = !!remoteAvatarLoadFailed[playerId];
+    return (
+      <div
+        className={`mx-auto mb-1 flex items-center justify-center overflow-hidden rounded-full bg-[#0d6b50] font-bold text-white shadow ${sizeClass}`}
+      >
+        {avatar && !failed ? (
+          <img
+            src={avatar}
+            alt={player?.name || "Jugador"}
+            className="h-full w-full object-cover"
+            referrerPolicy="no-referrer"
+            onError={() =>
+              setRemoteAvatarLoadFailed((prev) => ({
+                ...prev,
+                [playerId]: true,
+              }))
+            }
+          />
+        ) : (
+          (player?.name || fallback).slice(0, 1).toUpperCase()
+        )}
+      </div>
+    );
+  };
   const isMatchEnded = !!state.matchEnded;
   const rematch = state.rematch || { decisionsByPlayer: {}, resolved: false, result: null, status: "pending" };
   const myRematchDecision = rematch.decisionsByPlayer?.[myPlayerId] || null;
@@ -1241,27 +1274,21 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
         <div className="relative w-[min(96vw,60dvh)] max-w-[500px] sm:w-[min(76vw,76vh)] sm:-translate-y-[4vh]">
           <div className="relative aspect-square">
             <div className="absolute left-1/2 top-[-74px] z-30 -translate-x-1/2 text-center sm:top-[-100px]">
-              <div className="mx-auto mb-1 flex h-9 w-9 items-center justify-center rounded-full bg-[#0d6b50] text-sm font-bold text-white shadow">
-                {(opponent?.name || "R").slice(0, 1).toUpperCase()}
-              </div>
+              {renderSeatAvatar(opponent, "R", "h-9 w-9 text-sm")}
 
               {renderFanHand(opponentCards, { fromNorth: true })}
             </div>
 
             {isTwoVsTwo && (
               <div className="absolute left-[-46px] top-1/2 z-30 -translate-y-1/2 text-center sm:left-[-70px]">
-                <div className="mx-auto mb-1 flex h-8 w-8 items-center justify-center rounded-full bg-[#0d6b50] text-xs font-bold text-white shadow">
-                  {(leftPlayer?.name || "L").slice(0, 1).toUpperCase()}
-                </div>
+                {renderSeatAvatar(leftPlayer, "L", "h-8 w-8 text-xs")}
                 {renderSideFanBackCards(leftCards, "left")}
               </div>
             )}
 
             {isTwoVsTwo && (
               <div className="absolute right-[-46px] top-1/2 z-30 -translate-y-1/2 text-center sm:right-[-70px]">
-                <div className="mx-auto mb-1 flex h-8 w-8 items-center justify-center rounded-full bg-[#0d6b50] text-xs font-bold text-white shadow">
-                  {(rightPlayer?.name || "R").slice(0, 1).toUpperCase()}
-                </div>
+                {renderSeatAvatar(rightPlayer, "R", "h-8 w-8 text-xs")}
                 {renderSideFanBackCards(rightCards, "right")}
               </div>
             )}
