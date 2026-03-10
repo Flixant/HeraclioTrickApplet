@@ -1,6 +1,7 @@
-﻿import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { socket } from "../socket";
 import { getDeckCard, preloadDeckAssets, renderBackCard, renderCard } from "./deck";
+import { resolveMyPlayerId } from "../utils/playerIdentity";
 
 function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
   const [state, setState] = useState(gameState);
@@ -110,11 +111,11 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
     }
   })();
   const players = Array.isArray(state.players) ? state.players : [];
-  const playerBySocketId = players.find((p) => p.id === socket.id) || null;
-  const playerByToken = reconnectToken
-    ? players.find((p) => p.reconnectToken === reconnectToken)
-    : null;
-  const myPlayerId = playerBySocketId?.id || playerByToken?.id || socket.id;
+  const myPlayerId = resolveMyPlayerId(players, {
+    socketId: socket.id,
+    reconnectToken,
+    fallbackId: socket.id,
+  });
 
   const myCards = state.hands[myPlayerId] || [];
   const isTwoVsTwo = state.mode === "2vs2" && state.players.length === 4;
@@ -789,7 +790,7 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
             <h2 className="text-center text-xl font-bold text-amber-200">Partida terminada</h2>
             <p className="mt-1 text-center text-sm text-slate-300">
               {state.matchWinnerId
-                ? `${state.players.find((p) => p.id === state.matchWinnerId)?.name || "Pareja"} llegó a 12 puntos.`
+                ? `${state.players.find((p) => p.id === state.matchWinnerId)?.name || "Pareja"} llego a 12 puntos.`
                 : "Se alcanzo el fin de partida."}
             </p>
 
@@ -846,9 +847,9 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
               {rematch.resolved
                 ? rematch.result === "replay"
                   ? "Todos aceptaron: iniciando nueva partida..."
-                  : "Se decidiÃ³ salir al roomlist."
+                  : "Se decidio salir al roomlist."
                 : everyoneAnsweredRematch
-                  ? "Procesando decisiÃ³n final..."
+                  ? "Procesando decision final..."
                   : "Esperando la respuesta de todos los jugadores..."}
             </p>
             {rematch.resolved && rematch.result === "exit" && (

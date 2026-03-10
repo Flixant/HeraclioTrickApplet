@@ -5,6 +5,7 @@ import logo from "./assets/logo.png";
 import { auth, db, googleProvider, isFirebaseConfigured } from "./firebase";
 import { onAuthStateChanged, signInWithPopup, signInWithRedirect, signOut } from "firebase/auth";
 import { doc, getDoc, increment, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
+import { resolveMyPlayerId } from "./utils/playerIdentity";
 
 const SESSION_STORAGE_KEY = "truco_session_v1";
 const MESA_PATH_PREFIX = "/mesa/";
@@ -427,14 +428,12 @@ function App() {
   useEffect(() => {
     const players = Array.isArray(gameState?.players) ? gameState.players : [];
     if (!players.length) return;
-    const meBySocket = players.find((p) => p.id === socket.id) || null;
-    const meByToken =
-      reconnectToken ? players.find((p) => p.reconnectToken === reconnectToken) || null : null;
-    const meByName =
-      effectivePlayerName
-        ? players.find((p) => String(p.name || "").trim() === effectivePlayerName.trim()) || null
-        : null;
-    const resolvedId = meBySocket?.id || meByToken?.id || meByName?.id || null;
+    const resolvedId = resolveMyPlayerId(players, {
+      socketId: socket.id,
+      reconnectToken,
+      playerName: effectivePlayerName,
+      fallbackId: null,
+    });
     if (resolvedId) {
       myPlayerIdRef.current = resolvedId;
     }
@@ -444,14 +443,12 @@ function App() {
     if (!db || !authUser || !profile || !gameState?.matchEnded || !gameState?.matchWinnerId) return;
 
     const players = Array.isArray(gameState.players) ? gameState.players : [];
-    const meBySocket = players.find((p) => p.id === socket.id) || null;
-    const meByToken =
-      reconnectToken ? players.find((p) => p.reconnectToken === reconnectToken) || null : null;
-    const meByName =
-      effectivePlayerName
-        ? players.find((p) => String(p.name || "").trim() === effectivePlayerName.trim()) || null
-        : null;
-    const myPlayerId = meBySocket?.id || meByToken?.id || meByName?.id || myPlayerIdRef.current || null;
+    const myPlayerId = resolveMyPlayerId(players, {
+      socketId: socket.id,
+      reconnectToken,
+      playerName: effectivePlayerName,
+      fallbackId: myPlayerIdRef.current || null,
+    });
     if (!myPlayerId) {
       console.warn("[W/L] No se pudo resolver myPlayerId al cierre de partida");
       return;
