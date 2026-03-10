@@ -677,6 +677,7 @@ function App() {
         roomId={roomId}
         gameState={gameState}
         myAvatarUrl={avatarUrl}
+        myEmail={currentProfile?.email || authUser?.email || ""}
         onLeaveToRoomList={leaveToRoomList}
       />
     );

@@ -154,10 +154,12 @@ function startGame(room) {
   const { deck, hands, vira } = dealCards(players, deckConfig);
   const pointsByPlayer = {};
   const handWinsByPlayer = {};
+  const forcedFaceDownByPlayer = {};
 
   for (const playerId of players) {
     pointsByPlayer[playerId] = 0;
     handWinsByPlayer[playerId] = 0;
+    forcedFaceDownByPlayer[playerId] = false;
   }
 
   room.status = "playing";
@@ -196,6 +198,8 @@ function startGame(room) {
       callType: null,
       proposedValue: null,
       acceptedById: null,
+      raiseWindowUntil: 0,
+      raiseWindowById: null,
     },
     envido: {
       status: "idle",
@@ -209,10 +213,23 @@ function startGame(room) {
       resolved: false,
     },
     flor: buildFlorState(players, hands, vira),
+    canto11: {
+      status: "idle",
+      singingTeamKey: null,
+      responderTeamKey: null,
+      declareOrder: [],
+      declareIndex: 0,
+      declaredByPlayer: {},
+      singingMaxEnvite: 0,
+      responderMaxEnvite: 0,
+      responderEligible: false,
+      responderTurnId: null,
+    },
     turn: players[0],
     teams: buildTeams(players, room.mode),
     pointsByPlayer,
     handWinsByPlayer,
+    forcedFaceDownByPlayer,
     score: {
       team1: 0,
       team2: 0,
@@ -231,9 +248,11 @@ function redealRound(room, starterId) {
   const deckConfig = gameState.deckConfig || room.deckConfig || { allowedSuits: null };
   const { deck, hands, vira } = dealCards(players, deckConfig);
   const handWinsByPlayer = {};
+  const forcedFaceDownByPlayer = {};
 
   for (const playerId of players) {
     handWinsByPlayer[playerId] = 0;
+    forcedFaceDownByPlayer[playerId] = false;
     if (typeof gameState.pointsByPlayer?.[playerId] !== "number") {
       gameState.pointsByPlayer = gameState.pointsByPlayer || {};
       gameState.pointsByPlayer[playerId] = 0;
@@ -270,6 +289,8 @@ function redealRound(room, starterId) {
     callType: null,
     proposedValue: null,
     acceptedById: null,
+    raiseWindowUntil: 0,
+    raiseWindowById: null,
   };
   gameState.envido = {
     status: "idle",
@@ -283,6 +304,18 @@ function redealRound(room, starterId) {
     resolved: false,
   };
   gameState.flor = buildFlorState(players, hands, vira);
+  gameState.canto11 = {
+    status: "idle",
+    singingTeamKey: null,
+    responderTeamKey: null,
+    declareOrder: [],
+    declareIndex: 0,
+    declaredByPlayer: {},
+    singingMaxEnvite: 0,
+    responderMaxEnvite: 0,
+    responderEligible: false,
+    responderTurnId: null,
+  };
   gameState.turn = startTurn;
   gameState.teams = buildTeams(players, room.mode);
   if (!gameState.score || typeof gameState.score.team1 !== "number" || typeof gameState.score.team2 !== "number") {
@@ -292,6 +325,7 @@ function redealRound(room, starterId) {
     };
   }
   gameState.handWinsByPlayer = handWinsByPlayer;
+  gameState.forcedFaceDownByPlayer = forcedFaceDownByPlayer;
 
   return gameState;
 }

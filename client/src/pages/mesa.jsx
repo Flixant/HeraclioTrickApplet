@@ -40,7 +40,48 @@ function simplifyPlayerActionMessage(rawMessage) {
   return rawMessage;
 }
 
-function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
+function computeEnvidoValueClient(card, vira) {
+  if (!card) return 0;
+  const base = Number(card.envValue || 0);
+  if (!vira || card.suit !== vira.suit) return base;
+  const viraValue = Number(vira.value);
+  const cardValue = Number(card.value);
+  const pericoValue = viraValue === 11 ? 12 : 11;
+  const pericaValue = viraValue === 10 ? 12 : 10;
+  if (cardValue === pericoValue) return 30;
+  if (cardValue === pericaValue) return 29;
+  return base;
+}
+
+function computeEnvidoClient(cards, vira) {
+  if (!Array.isArray(cards) || cards.length === 0) return 0;
+  const bySuit = {};
+  const values = [];
+  let bestSingle = 0;
+  for (const card of cards) {
+    const v = computeEnvidoValueClient(card, vira);
+    values.push(v);
+    bestSingle = Math.max(bestSingle, v);
+    bySuit[card.suit] = bySuit[card.suit] || [];
+    bySuit[card.suit].push(v);
+  }
+  let bestPair = 0;
+  for (const suitValues of Object.values(bySuit)) {
+    if (suitValues.length >= 2) {
+      const topTwo = [...suitValues].sort((a, b) => b - a).slice(0, 2);
+      const hasPiece = topTwo.some((x) => x >= 29);
+      bestPair = Math.max(bestPair, topTwo[0] + topTwo[1] + (hasPiece ? 0 : 20));
+    }
+  }
+  const special = values.filter((v) => v >= 29);
+  const regular = values.filter((v) => v < 29);
+  if (special.length && regular.length) {
+    bestPair = Math.max(bestPair, Math.max(...special) + Math.max(...regular));
+  }
+  return Math.max(bestSingle, bestPair);
+}
+
+function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoomList }) {
   const [state, setState] = useState(gameState);
   const stateRef = useRef(gameState);
   const [message, setMessage] = useState("");
@@ -73,6 +114,15 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
     setState(gameState);
     stateRef.current = gameState;
   }, [gameState]);
+
+  useEffect(() => {
+    const until = Number(state?.truco?.raiseWindowUntil || 0);
+    if (until <= Date.now()) return;
+    const timeout = setTimeout(() => {
+      setState((prev) => ({ ...prev }));
+    }, Math.max(50, until - Date.now() + 20));
+    return () => clearTimeout(timeout);
+  }, [state?.truco?.raiseWindowUntil]);
 
   useEffect(() => {
     setMessage("");
@@ -160,6 +210,7 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
   });
 
   const myCards = state.hands[myPlayerId] || [];
+  const isTestUser = String(myEmail || "").trim().toLowerCase() === "frantoima@gmail.com";
   const isTwoVsTwo = state.mode === "2vs2" && state.players.length === 4;
   const mySeatIndex = state.players.findIndex((p) => p.id === myPlayerId);
   const safeMySeat = mySeatIndex >= 0 ? mySeatIndex : 0;
@@ -230,6 +281,15 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
     const bIdx = state.players.findIndex((p) => p.id === playerB);
     if (aIdx < 0 || bIdx < 0) return false;
     return aIdx % 2 === bIdx % 2;
+  };
+  const getPlayerTeamKeyFromTeams = (teams, playerId, playersList) => {
+    const team1 = Array.isArray(teams?.team1) ? teams.team1 : [];
+    const team2 = Array.isArray(teams?.team2) ? teams.team2 : [];
+    if (team1.includes(playerId)) return "team1";
+    if (team2.includes(playerId)) return "team2";
+    const idx = (playersList || []).findIndex((p) => p.id === playerId);
+    if (idx < 0) return null;
+    return idx % 2 === 0 ? "team1" : "team2";
   };
 
   const trucoState = state.truco || { status: "idle", callerId: null, responderId: null };
@@ -321,13 +381,31 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
     envidoState.status === "pending" ||
     envidoState.status === "accepted" ||
     envidoState.status === "rejected";
-  const enviteTitle = isFlorPending || !!florState.florEnvidoCalled || florAlreadySung ? "Flor" : "Envido";
+  const baseEnviteTitle = isFlorPending || !!florState.florEnvidoCalled || florAlreadySung ? "Flor" : "Envido";
   const isPardaSelecting = state.firstHandTie && state.pardaPhase === "selecting";
   const hasSubmittedParda = isPardaSelecting && !!state.pardaSelections?.[myPlayerId];
   const playerIds = state.players.map((p) => p.id);
   const isInFirstHand =
     Object.values(state.handWinsByPlayer || {}).every((wins) => wins === 0) &&
     (state.tableCards?.length || 0) < playerIds.length;
+  const canto11 = state.canto11 || { status: "idle" };
+  const isCanto11Declaring = canto11.status === "declaring";
+  const isCanto11Responding = canto11.status === "responding";
+  const isCanto11Active = isCanto11Declaring || isCanto11Responding;
+  const myTeamKey = getPlayerTeamKeyFromTeams(state.teams, myPlayerId, state.players);
+  const isCanto11SingerTeam = !!myTeamKey && myTeamKey === canto11.singingTeamKey;
+  const isCanto11ResponderTeam = !!myTeamKey && myTeamKey === canto11.responderTeamKey;
+  const canto11ResponderTurnId = canto11.responderTurnId || state.turn;
+  const canDeclareCanto11Envite = isCanto11Declaring && isCanto11SingerTeam && state.turn === myPlayerId;
+  const canRespondCanto11 = isCanto11Responding && isCanto11ResponderTeam && (
+    canto11ResponderTurnId === myPlayerId || isSameTeamByState(canto11ResponderTurnId, myPlayerId)
+  );
+  const canCanto11Privo = canRespondCanto11 && !!canto11.responderEligible;
+  const canCanto11NoPrivo = canRespondCanto11;
+  const myCurrentEnvite = computeEnvidoClient(myCards, state.vira);
+  const enviteTitle = isCanto11Active ? "Cantando" : baseEnviteTitle;
+  const activeEnviteLabelDisplay = isCanto11Active ? "Estoy cantando" : activeEnviteLabel;
+  const isEnviteActiveDisplay = isCanto11Active || isEnviteActive;
   const canCallEnvido =
     isMyTurn &&
     envidoState.status === "idle" &&
@@ -337,6 +415,7 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
     !isTrucoPending &&
     !isEnvidoPending &&
     !isFlorPending &&
+    !isCanto11Active &&
     !florAlreadySung &&
     !myHasAvailableFlor;
   const canCallFlor =
@@ -345,6 +424,7 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
     !isTrucoPending &&
     !isEnvidoPending &&
     !isFlorPending &&
+    !isCanto11Active &&
     myHasAvailableFlor;
 
   const nextCallByValue = {
@@ -369,14 +449,16 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
     !!trucoState.acceptedById &&
     (trucoState.acceptedById === myPlayerId ||
       isSameTeamByState(trucoState.acceptedById, myPlayerId));
+  const trucoRaiseWindowOpen = Number(trucoState.raiseWindowUntil || 0) > Date.now();
+  const canRaiseWithinWindow = trucoRaiseWindowOpen && acceptedByMyTeam;
   const canCallNextRaise =
     !!nextCall &&
-    isMyTurn &&
+    (isMyTurn || canRaiseWithinWindow) &&
     !isTrucoPending &&
     !isEnvidoPending &&
     !isFlorPending &&
+    !isCanto11Active &&
     (!nextCall.requiresAcceptedBy || acceptedByMyTeam);
-
   const me = state.players.find((p) => p.id === myPlayerId);
   const getPlayerAvatarUrl = (player) => {
     const raw = player?.avatarUrl;
@@ -486,6 +568,18 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
     const safeStones =
       Number.isFinite(Number(stones)) ? Math.max(1, Math.min(12, Math.floor(Number(stones)))) : null;
     socket.emit("call:envido", { roomId, stones: safeStones });
+  };
+
+  const declareCanto11Envite = () => {
+    socket.emit("canto11:declare-envite", { roomId });
+  };
+
+  const callCanto11PrivoTruco = () => {
+    socket.emit("canto11:privo-truco", { roomId });
+  };
+
+  const callCanto11NoPrivo = () => {
+    socket.emit("canto11:no-privo", { roomId });
   };
 
   const toggleTestDeckMode = () => {
@@ -601,15 +695,17 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
   const canPassCard =
     isMyTurn &&
     !hasPendingCall &&
+    !isCanto11Active &&
     !isPardaSelecting &&
     myCards.length > 0;
   const canGoMazo =
     isMyTurn &&
     !hasPendingCall &&
+    !isCanto11Active &&
     !isPardaSelecting &&
     myCards.length > 0;
   const canPlayLey =
-    isMyTurn && isInFirstHand && !hasPendingCall;
+    isMyTurn && isInFirstHand && !hasPendingCall && !isCanto11Active;
 
   const togglePassCard = () => {
     if (!canPassCard) return;
@@ -945,55 +1041,59 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
           }
         }
       `}</style>
-      <button
-        type="button"
-        onClick={() => setShowTestPanel((prev) => !prev)}
-        className="fixed bottom-48 left-0 z-[76] rounded-r-full bg-emerald-800 px-3 py-2 text-xs font-semibold text-white shadow-[0_6px_14px_rgba(0,0,0,0.35)] transition hover:bg-emerald-700"
-      >
-        {showTestPanel ? "Cerrar Test" : "Test"}
-      </button>
-
-      <div
-        className={`fixed bottom-4 left-0 z-[75] w-[220px] rounded-r-lg border border-emerald-200/35 bg-emerald-50/95 p-2 text-slate-800 shadow-[0_8px_18px_rgba(0,0,0,0.3)] transition-transform duration-300 ease-out ${
-          showTestPanel ? "translate-x-0" : "-translate-x-full"
-        }`}
-      >
-        <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-500">Test</div>
-        <div className="flex flex-col gap-1.5">
+      {isTestUser && (
+        <>
           <button
             type="button"
-            onClick={toggleTestDeckMode}
-            className={`w-full rounded-full px-3 py-1.5 text-xs font-semibold text-white transition ${
-              isBastosEspadasMode
-                ? "bg-slate-600 hover:bg-slate-700"
-                : "bg-emerald-700 hover:bg-emerald-800"
+            onClick={() => setShowTestPanel((prev) => !prev)}
+            className="fixed bottom-48 left-0 z-[76] rounded-r-full bg-emerald-800 px-3 py-2 text-xs font-semibold text-white shadow-[0_6px_14px_rgba(0,0,0,0.35)] transition hover:bg-emerald-700"
+          >
+            {showTestPanel ? "Cerrar Test" : "Test"}
+          </button>
+
+          <div
+            className={`fixed bottom-4 left-0 z-[75] w-[220px] rounded-r-lg border border-emerald-200/35 bg-emerald-50/95 p-2 text-slate-800 shadow-[0_8px_18px_rgba(0,0,0,0.3)] transition-transform duration-300 ease-out ${
+              showTestPanel ? "translate-x-0" : "-translate-x-full"
             }`}
           >
-            {isBastosEspadasMode ? "Desactivar Bastos/Espadas" : "Activar Bastos/Espadas"}
-          </button>
-          <button
-            type="button"
-            onClick={redealTestRound}
-            className="w-full rounded-full bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-800"
-          >
-            Repartir de nuevo
-          </button>
-          <button
-            type="button"
-            onClick={forceTestFlor}
-            className="w-full rounded-full bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-800"
-          >
-            Forzar Flor (yo)
-          </button>
-          <button
-            type="button"
-            onClick={forceTestFlorReservada}
-            className="w-full rounded-full bg-emerald-800 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-900"
-          >
-            Forzar Flor Reservada
-          </button>
-        </div>
-      </div>
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-500">Test</div>
+            <div className="flex flex-col gap-1.5">
+              <button
+                type="button"
+                onClick={toggleTestDeckMode}
+                className={`w-full rounded-full px-3 py-1.5 text-xs font-semibold text-white transition ${
+                  isBastosEspadasMode
+                    ? "bg-slate-600 hover:bg-slate-700"
+                    : "bg-emerald-700 hover:bg-emerald-800"
+                }`}
+              >
+                {isBastosEspadasMode ? "Desactivar Bastos/Espadas" : "Activar Bastos/Espadas"}
+              </button>
+              <button
+                type="button"
+                onClick={redealTestRound}
+                className="w-full rounded-full bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-800"
+              >
+                Repartir de nuevo
+              </button>
+              <button
+                type="button"
+                onClick={forceTestFlor}
+                className="w-full rounded-full bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-800"
+              >
+                Forzar Flor (yo)
+              </button>
+              <button
+                type="button"
+                onClick={forceTestFlorReservada}
+                className="w-full rounded-full bg-emerald-800 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-900"
+              >
+                Forzar Flor Reservada
+              </button>
+            </div>
+          </div>
+        </>
+      )}
 
       <div className="fixed right-2 top-2 z-50 w-[132px] rounded-lg border border-emerald-200/35 bg-emerald-50/95 p-1 text-slate-800 shadow-[0_8px_18px_rgba(0,0,0,0.3)] sm:right-4 sm:top-4 sm:w-[195px] sm:p-1.5">
         <div className="mb-1 flex items-center justify-between">
@@ -1040,13 +1140,15 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
             />
           </div>
           <div className="flex items-center justify-between rounded-md bg-white/80 px-1 py-0.5 sm:px-1.5 sm:py-1">
-            <span className="text-[10px] font-semibold text-slate-700 sm:text-xs">{enviteTitle}</span>
+            <span className={`text-[10px] font-semibold sm:text-xs ${isCanto11Active ? "text-red-600" : "text-slate-700"}`}>
+              {enviteTitle}
+            </span>
             <span
               className={`inline-block h-4 w-4 rounded-full sm:h-4 sm:w-14 ${
-                isEnviteActive ? "bg-green-700" : "bg-slate-500"
+                isEnviteActiveDisplay ? "bg-green-700" : "bg-slate-500"
               }`}
-              title={isEnviteActive ? activeEnviteLabel : "Sin canto"}
-              aria-label={isEnviteActive ? activeEnviteLabel : "Sin canto"}
+              title={isEnviteActiveDisplay ? activeEnviteLabelDisplay : "Sin canto"}
+              aria-label={isEnviteActiveDisplay ? activeEnviteLabelDisplay : "Sin canto"}
             />
           </div>
         </div>
@@ -1346,7 +1448,36 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
           </div>
 
           <div className="flex gap-2.5 sm:gap-2">
-            {isPendingResponder ? (
+            {isCanto11Active ? (
+              <>
+                <button
+                  type="button"
+                  onClick={canDeclareCanto11Envite ? declareCanto11Envite : canCanto11Privo ? callCanto11PrivoTruco : undefined}
+                  disabled={!(canDeclareCanto11Envite || canCanto11Privo)}
+                  className={`flex-1 rounded-full px-3 py-2 text-sm font-semibold text-white transition sm:py-1 sm:text-xs ${
+                    canDeclareCanto11Envite || canCanto11Privo
+                      ? "bg-emerald-700 hover:bg-emerald-800"
+                      : "cursor-not-allowed bg-slate-400"
+                  }`}
+                >
+                  {canDeclareCanto11Envite
+                    ? `Tengo ${myCurrentEnvite}`
+                    : "Privo y Truco"}
+                </button>
+                <button
+                  type="button"
+                  onClick={callCanto11NoPrivo}
+                  disabled={!canCanto11NoPrivo}
+                  className={`flex-1 rounded-full px-3 py-2 text-sm font-semibold text-white transition sm:py-1 sm:text-xs ${
+                    canCanto11NoPrivo
+                      ? "bg-gradient-to-r from-emerald-600 to-emerald-800 hover:from-emerald-700 hover:to-emerald-900"
+                      : "cursor-not-allowed bg-slate-400"
+                  }`}
+                >
+                  No Privo
+                </button>
+              </>
+            ) : isPendingResponder ? (
               <>
                 <button
                   type="button"
