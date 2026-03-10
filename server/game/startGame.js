@@ -185,6 +185,7 @@ function startGame(room) {
     roundEnding: false,
     matchEnded: false,
     matchWinnerId: null,
+    matchEndedAt: null,
     rematch: null,
     inputLockedUntil: 0,
     roundPointValue: 1,
@@ -258,6 +259,7 @@ function redealRound(room, starterId) {
   gameState.roundEnding = false;
   gameState.matchEnded = false;
   gameState.matchWinnerId = null;
+  gameState.matchEndedAt = null;
   gameState.rematch = null;
   gameState.inputLockedUntil = 0;
   gameState.roundPointValue = 1;

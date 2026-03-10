@@ -86,6 +86,7 @@ function buildMatchFingerprint(roomId, gameState) {
     roomId || "",
     gameState?.mode || "",
     gameState?.matchWinnerId || "",
+    `ended:${Number(gameState?.matchEndedAt) || 0}`,
     `sv:${Number(gameState?.stateVersion) || 0}`,
     `t1:${Number(score.team1) || 0}`,
     `t2:${Number(score.team2) || 0}`,
@@ -402,7 +403,11 @@ function App() {
     const meBySocket = players.find((p) => p.id === socket.id) || null;
     const meByToken =
       reconnectToken ? players.find((p) => p.reconnectToken === reconnectToken) || null : null;
-    const myPlayerId = meBySocket?.id || meByToken?.id || null;
+    const meByName =
+      effectivePlayerName
+        ? players.find((p) => String(p.name || "").trim() === effectivePlayerName.trim()) || null
+        : null;
+    const myPlayerId = meBySocket?.id || meByToken?.id || meByName?.id || null;
     if (!myPlayerId) return;
 
     const fingerprint = buildMatchFingerprint(roomId, gameState);
@@ -438,7 +443,7 @@ function App() {
         console.error("No se pudo actualizar W/L en Firebase:", error);
         pendingMatchUpdateRef.current.delete(fingerprint);
       });
-  }, [authUser, db, gameState, profile, reconnectToken, roomId]);
+  }, [authUser, db, effectivePlayerName, gameState, profile, reconnectToken, roomId]);
 
   const joinRoom = (nextRoomId) => {
     if (!effectivePlayerName.trim()) return;

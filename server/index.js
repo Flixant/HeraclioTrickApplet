@@ -775,6 +775,16 @@ function burnFlorOnRespondWithoutConFlor(gameState, playerId) {
   markFlorBurned(gameState, playerId);
 }
 
+function burnFlorOnEnvidoResponse(gameState, playerId) {
+  if (!gameState || !playerId) return;
+  const teamIds = getTeamPlayerIds(gameState, playerId);
+  for (const teammateId of teamIds) {
+    if (!hasAvailableFlor(gameState, teammateId)) continue;
+    if (gameState?.flor?.sungByPlayer?.[teammateId]) continue;
+    markFlorBurned(gameState, teammateId);
+  }
+}
+
 function canSingFlorNow(gameState, playerId) {
   if (!hasAvailableFlor(gameState, playerId)) return false;
   if (isFirstHandOpen(gameState)) return true;
@@ -1387,6 +1397,7 @@ io.on("connection", (socket) => {
       messageQueue.push(`${championLabel} gana la partida`);
       gameState.matchEnded = true;
       gameState.matchWinnerId = matchWinnerId;
+      gameState.matchEndedAt = Date.now();
       gameState.rematch = buildRematchState(gameState);
       room.status = "finished";
       emitRooms();
@@ -1762,6 +1773,7 @@ io.on("connection", (socket) => {
       const pendingSince = ensurePendingSince(gameState.envido);
       if (!canBotResolvePending(roomId, botId, "envido", pendingSince)) return;
       if (!canBotActNow(roomId, botId)) return;
+      burnFlorOnEnvidoResponse(gameState, botId);
       const envido = gameState.envido || {};
       const snapshot = gameState.roundHandsSnapshot || gameState.hands || {};
       const myEnvido = computeEnvido(snapshot[botId] || [], gameState.vira);
@@ -2826,7 +2838,7 @@ io.on("connection", (socket) => {
       socket.emit("server:message", "No te corresponde responder el envido");
       return;
     }
-    burnFlorOnRespondWithoutConFlor(gameState, socket.id);
+    burnFlorOnEnvidoResponse(gameState, socket.id);
 
     const snapshot = gameState.roundHandsSnapshot || gameState.hands || {};
     const envidoByPlayer = {};
@@ -2873,7 +2885,7 @@ io.on("connection", (socket) => {
       socket.emit("server:message", "No te corresponde responder el envido");
       return;
     }
-    burnFlorOnRespondWithoutConFlor(gameState, socket.id);
+    burnFlorOnEnvidoResponse(gameState, socket.id);
 
     const callerId = envido.callerId;
     const rejectPoints = Math.max(1, envido.acceptedPoints || 1);
@@ -2922,7 +2934,7 @@ io.on("connection", (socket) => {
       socket.emit("server:message", "No te corresponde responder el envido");
       return;
     }
-    burnFlorOnRespondWithoutConFlor(gameState, socket.id);
+    burnFlorOnEnvidoResponse(gameState, socket.id);
     if (envido.callType === "falta") {
       socket.emit("server:message", "A Falta Envido solo se responde Quiero o No Quiero");
       return;
@@ -3291,6 +3303,7 @@ io.on("connection", (socket) => {
       messageQueue.push(`${championLabel} gana la partida`);
       gameState.matchEnded = true;
       gameState.matchWinnerId = matchWinnerId;
+      gameState.matchEndedAt = Date.now();
       gameState.rematch = buildRematchState(gameState);
       room.status = "finished";
       emitRooms();
