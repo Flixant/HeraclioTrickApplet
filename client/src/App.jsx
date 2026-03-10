@@ -76,6 +76,11 @@ function isSameTeamInState(gameState, playerA, playerB) {
 }
 
 function buildMatchFingerprint(roomId, gameState) {
+  const endedAt = Number(gameState?.matchEndedAt) || 0;
+  if (endedAt > 0) {
+    return [roomId || "", "endedAt", String(endedAt)].join("::");
+  }
+
   const score = gameState?.score || {};
   const points = gameState?.pointsByPlayer || {};
   const pointsPart = Object.keys(points)
@@ -86,8 +91,6 @@ function buildMatchFingerprint(roomId, gameState) {
     roomId || "",
     gameState?.mode || "",
     gameState?.matchWinnerId || "",
-    `ended:${Number(gameState?.matchEndedAt) || 0}`,
-    `sv:${Number(gameState?.stateVersion) || 0}`,
     `t1:${Number(score.team1) || 0}`,
     `t2:${Number(score.team2) || 0}`,
     pointsPart,

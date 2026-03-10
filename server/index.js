@@ -3180,6 +3180,57 @@ io.on("connection", (socket) => {
     const messageQueue = [];
     messageQueue.push(`${me?.name || "Jugador"} se fue al mazo`);
 
+    const resolveEnvidoOnMazo = () => {
+      const envido = gameState.envido || {};
+      if (envido.resolved) return;
+      if (envido.status !== "accepted" && envido.status !== "rejected") return;
+
+      let envidoWinnerId = envido.winnerId || null;
+      let envidoPoints = Number(envido.points || 0);
+
+      if (envido.status === "accepted") {
+        const snapshot = gameState.roundHandsSnapshot || gameState.hands || {};
+        const envidoByPlayer = {};
+        const playerIds = (gameState.players || []).map((p) => p.id);
+        for (const playerId of playerIds) {
+          envidoByPlayer[playerId] = computeEnvido(snapshot[playerId] || [], gameState.vira);
+        }
+        envidoWinnerId =
+          envidoWinnerId || resolveScoreWinnerByTeam(gameState, envidoByPlayer, playerIds);
+        envidoPoints = Math.max(1, envidoPoints || Number(envido.acceptedPoints || 0));
+        gameState.envido = {
+          ...envido,
+          winnerId: envidoWinnerId,
+          points: envidoPoints,
+          acceptedPoints: Math.max(1, Number(envido.acceptedPoints || envidoPoints || 1)),
+          envidoByPlayer,
+          resolved: false,
+        };
+      } else {
+        envidoWinnerId = envidoWinnerId || envido.callerId || null;
+        envidoPoints = Math.max(1, envidoPoints || Number(envido.acceptedPoints || 1));
+        gameState.envido = {
+          ...envido,
+          winnerId: envidoWinnerId,
+          points: envidoPoints,
+          acceptedPoints: Math.max(1, Number(envido.acceptedPoints || envidoPoints || 1)),
+          resolved: false,
+        };
+      }
+
+      if (envidoWinnerId && envidoPoints > 0) {
+        addPoints(gameState, envidoWinnerId, envidoPoints);
+        const envidoWinnerLabel = getWinnerLabel(gameState, envidoWinnerId);
+        const envidoTotal = getTotalPoints(gameState, envidoWinnerId);
+        messageQueue.push(`${envidoWinnerLabel} gana el envido`);
+        messageQueue.push(
+          `${envidoWinnerLabel} suma ${envidoPoints} punto${envidoPoints > 1 ? "s" : ""} de Envido (total ${envidoTotal})`
+        );
+      }
+
+      gameState.envido = { ...(gameState.envido || envido), resolved: true };
+    };
+
     const reservadaOwnerId = getFlorReservadaOwnerId(gameState);
     const opposingReservadaOwnerId =
       reservadaOwnerId && !isSameTeam(gameState, socket.id, reservadaOwnerId)
@@ -3210,7 +3261,7 @@ io.on("connection", (socket) => {
         );
       }
 
-      gameState.envido = { ...(gameState.envido || {}), resolved: true };
+      resolveEnvidoOnMazo();
       gameState.flor = {
         ...(gameState.flor || {}),
         resolved: true,
@@ -3235,49 +3286,7 @@ io.on("connection", (socket) => {
         );
       }
 
-      const envido = gameState.envido || {};
-      const skipEnvidoPointsByFlor = florPointsByMazo > 0 && !reservadaOwnerId;
-      if (
-        !skipEnvidoPointsByFlor &&
-        !envido.resolved &&
-        (envido.status === "accepted" || envido.status === "rejected")
-      ) {
-        let envidoWinnerId = envido.winnerId || null;
-        let envidoPoints = Number(envido.points || 0);
-
-        if (envido.status === "accepted") {
-          const snapshot = gameState.roundHandsSnapshot || gameState.hands || {};
-          const envidoByPlayer = {};
-          const playerIds = (gameState.players || []).map((p) => p.id);
-          for (const playerId of playerIds) {
-            envidoByPlayer[playerId] = computeEnvido(snapshot[playerId] || [], gameState.vira);
-          }
-          envidoWinnerId =
-            envidoWinnerId || resolveScoreWinnerByTeam(gameState, envidoByPlayer, playerIds);
-          envidoPoints = Math.max(1, envidoPoints || Number(envido.acceptedPoints || 0));
-          gameState.envido = {
-            ...envido,
-            winnerId: envidoWinnerId,
-            points: envidoPoints,
-            acceptedPoints: Math.max(1, Number(envido.acceptedPoints || envidoPoints || 1)),
-            envidoByPlayer,
-            resolved: false,
-          };
-        }
-
-        if (envidoWinnerId && envidoPoints > 0) {
-          addPoints(gameState, envidoWinnerId, envidoPoints);
-          const envidoWinnerLabel = getWinnerLabel(gameState, envidoWinnerId);
-          const envidoTotal = getTotalPoints(gameState, envidoWinnerId);
-          messageQueue.push(`${envidoWinnerLabel} gana el envido`);
-          messageQueue.push(
-            `${envidoWinnerLabel} suma ${envidoPoints} punto${envidoPoints > 1 ? "s" : ""} de Envido (total ${envidoTotal})`
-          );
-        }
-        gameState.envido = { ...(gameState.envido || envido), resolved: true };
-      } else if (skipEnvidoPointsByFlor && !envido.resolved) {
-        gameState.envido = { ...envido, resolved: true };
-      }
+      resolveEnvidoOnMazo();
 
       addPoints(gameState, opponentId, trucoPointsInPlay);
       const totalAfterTruco = getTotalPoints(gameState, opponentId);
