@@ -1,10 +1,14 @@
-﻿import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { socket } from "./socket";
 import Mesa from "./pages/mesa";
 import logo from "./assets/logo.png";
+import { auth, db, googleProvider, isFirebaseConfigured } from "./firebase";
+import { onAuthStateChanged, signInWithPopup, signInWithRedirect, signOut } from "firebase/auth";
+import { doc, getDoc, increment, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
 
 const SESSION_STORAGE_KEY = "truco_session_v1";
 const MESA_PATH_PREFIX = "/mesa/";
+const COUNTED_MATCHES_STORAGE_KEY = "truco_counted_matches_v1";
 
 function readStoredSession() {
   try {
@@ -21,6 +25,22 @@ function writeStoredSession(nextSession) {
   } catch {}
 }
 
+function readCountedMatches() {
+  try {
+    const raw = localStorage.getItem(COUNTED_MATCHES_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeCountedMatches(nextMatches) {
+  try {
+    localStorage.setItem(COUNTED_MATCHES_STORAGE_KEY, JSON.stringify(nextMatches));
+  } catch {}
+}
+
 function getOrCreateReconnectToken() {
   const current = readStoredSession();
   if (current.reconnectToken) return current.reconnectToken;
@@ -31,81 +51,46 @@ function getOrCreateReconnectToken() {
   return token;
 }
 
-function getOrCreateDummyProfile() {
-  const current = readStoredSession();
-  const defaultName = "Felix";
-  const needsNameMigration =
-    !current.playerName || current.playerName.trim().toLowerCase() === "jugador demo";
-  const hasBaseProfileData =
-    current.profileId &&
-    typeof current.realMoneyAccumulated === "number" &&
-    typeof current.fantasyMoneyAccumulated === "number";
-  const missingWinLossData =
-    typeof current.wins !== "number" || typeof current.losses !== "number";
-
-  if (hasBaseProfileData && missingWinLossData) {
-    writeStoredSession({
-      ...current,
-      wins: Math.floor(18 + Math.random() * 82),
-      losses: Math.floor(8 + Math.random() * 44),
-    });
-  }
-
-  const refreshed = readStoredSession();
-  if (
-    (refreshed.playerName || needsNameMigration) &&
-    refreshed.profileId &&
-    typeof refreshed.realMoneyAccumulated === "number" &&
-    typeof refreshed.fantasyMoneyAccumulated === "number" &&
-    typeof refreshed.wins === "number" &&
-    typeof refreshed.losses === "number"
-  ) {
-    const finalName = needsNameMigration ? defaultName : refreshed.playerName;
-    if (finalName !== refreshed.playerName) {
-      writeStoredSession({
-        ...refreshed,
-        playerName: finalName,
-      });
-    }
-    return {
-      name: finalName,
-      id: refreshed.profileId,
-      realMoneyAccumulated: refreshed.realMoneyAccumulated,
-      fantasyMoneyAccumulated: refreshed.fantasyMoneyAccumulated,
-      wins: refreshed.wins,
-      losses: refreshed.losses,
-    };
-  }
-  const profileId = `VEN${Math.floor(1000 + Math.random() * 9000)}`;
-  const name = defaultName;
-  const realMoneyAccumulated = Number((Math.random() * 250 + 25).toFixed(2));
-  const fantasyMoneyAccumulated = Math.floor(8000 + Math.random() * 42000);
-  const wins = Math.floor(18 + Math.random() * 82);
-  const losses = Math.floor(8 + Math.random() * 44);
-  writeStoredSession({
-    ...current,
-    playerName: name,
-    profileId,
-    realMoneyAccumulated,
-    fantasyMoneyAccumulated,
-    wins,
-    losses,
-  });
-  return {
-    name,
-    id: profileId,
-    realMoneyAccumulated,
-    fantasyMoneyAccumulated,
-    wins,
-    losses,
-  };
-}
-
 function getRoomIdFromPathname() {
   const path = window.location.pathname || "/";
   if (!path.startsWith(MESA_PATH_PREFIX)) return null;
   const roomId = decodeURIComponent(path.slice(MESA_PATH_PREFIX.length)).trim();
   return roomId || null;
+}
+
+function isSameTeamInState(gameState, playerA, playerB) {
+  if (!gameState || !playerA || !playerB) return false;
+  const team1 = Array.isArray(gameState.teams?.team1) ? gameState.teams.team1 : [];
+  const team2 = Array.isArray(gameState.teams?.team2) ? gameState.teams.team2 : [];
+  if (team1.length || team2.length) {
+    return (
+      (team1.includes(playerA) && team1.includes(playerB)) ||
+      (team2.includes(playerA) && team2.includes(playerB))
+    );
+  }
+  const players = gameState.players || [];
+  const aIdx = players.findIndex((p) => p.id === playerA);
+  const bIdx = players.findIndex((p) => p.id === playerB);
+  if (aIdx < 0 || bIdx < 0) return false;
+  return aIdx % 2 === bIdx % 2;
+}
+
+function buildMatchFingerprint(roomId, gameState) {
+  const score = gameState?.score || {};
+  const points = gameState?.pointsByPlayer || {};
+  const pointsPart = Object.keys(points)
+    .sort()
+    .map((k) => `${k}:${points[k]}`)
+    .join("|");
+  return [
+    roomId || "",
+    gameState?.mode || "",
+    gameState?.matchWinnerId || "",
+    `sv:${Number(gameState?.stateVersion) || 0}`,
+    `t1:${Number(score.team1) || 0}`,
+    `t2:${Number(score.team2) || 0}`,
+    pointsPart,
+  ].join("::");
 }
 
 function setUrlForRoom(roomId) {
@@ -122,20 +107,128 @@ function clearLocalSessionAndReload() {
   window.location.reload();
 }
 
+function generateProfileId() {
+  return `VEN${Math.floor(1000 + Math.random() * 9000)}`;
+}
+
+function generateGuestProfileId() {
+  return `INV${Math.floor(1000 + Math.random() * 9000)}`;
+}
+
+function getUserDisplayName(user, fallback = "Jugador") {
+  if (!user) return fallback;
+  const providerName = user.providerData?.find((p) => p?.displayName)?.displayName;
+  return user.displayName || providerName || fallback;
+}
+
+function getUserPhotoURL(user) {
+  if (!user) return "";
+  const providerPhoto = user.providerData?.find((p) => p?.photoURL)?.photoURL;
+  return user.photoURL || providerPhoto || "";
+}
+
+async function ensurePlayerProfile(user) {
+  const profileRef = doc(db, "players", user.uid);
+  const snapshot = await getDoc(profileRef);
+  const nextDisplayName = getUserDisplayName(user, "Jugador");
+  const nextPhotoURL = getUserPhotoURL(user);
+
+  if (snapshot.exists()) {
+    const current = snapshot.data() || {};
+    const safeDisplayName = nextDisplayName || current.displayName || "Jugador";
+    const safePhotoURL = nextPhotoURL || current.photoURL || "";
+    if (current.displayName !== safeDisplayName || current.photoURL !== safePhotoURL) {
+      await updateDoc(profileRef, {
+        displayName: safeDisplayName,
+        photoURL: safePhotoURL,
+        updatedAt: serverTimestamp(),
+      });
+    }
+    return {
+      uid: user.uid,
+      displayName: safeDisplayName,
+      email: user.email || "",
+      photoURL: safePhotoURL,
+      profileId: current.profileId || generateProfileId(),
+      realMoneyAccumulated: Number(current.realMoneyAccumulated || 0),
+      fantasyMoneyAccumulated: Number(current.fantasyMoneyAccumulated || 0),
+      wins: Number(current.wins || 0),
+      losses: Number(current.losses || 0),
+    };
+  }
+
+  const created = {
+    uid: user.uid,
+    email: user.email || "",
+    displayName: nextDisplayName || "Jugador",
+    photoURL: nextPhotoURL || "",
+    profileId: generateProfileId(),
+    realMoneyAccumulated: 0,
+    fantasyMoneyAccumulated: 0,
+    wins: 0,
+    losses: 0,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  await setDoc(profileRef, created);
+  return {
+    uid: user.uid,
+    email: created.email,
+    displayName: created.displayName,
+    photoURL: created.photoURL,
+    profileId: created.profileId,
+    realMoneyAccumulated: 0,
+    fantasyMoneyAccumulated: 0,
+    wins: 0,
+    losses: 0,
+  };
+}
+
 function App() {
-  const [dummyProfile] = useState(() => getOrCreateDummyProfile());
   const [connected, setConnected] = useState(false);
-  const [playerName] = useState(() => {
-    const saved = readStoredSession().playerName;
-    return saved || dummyProfile.name;
-  });
   const [rooms, setRooms] = useState([]);
   const [gameState, setGameState] = useState(null);
   const [roomId, setRoomId] = useState(() => getRoomIdFromPathname() || null);
   const [show1v1Rooms, setShow1v1Rooms] = useState(true);
   const [show2v2Rooms, setShow2v2Rooms] = useState(true);
   const [reconnectToken] = useState(() => getOrCreateReconnectToken());
+  const [authUser, setAuthUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profile, setProfile] = useState(null);
+  const [guestProfile, setGuestProfile] = useState(() => {
+    const saved = readStoredSession();
+    if (!saved?.isGuest || !saved?.playerName) return null;
+    return {
+      uid: null,
+      email: "",
+      displayName: saved.playerName,
+      photoURL: "",
+      profileId: saved.profileId || generateGuestProfileId(),
+      realMoneyAccumulated: Number(saved.realMoneyAccumulated || 0),
+      fantasyMoneyAccumulated: Number(saved.fantasyMoneyAccumulated || 0),
+      wins: Number(saved.wins || 0),
+      losses: Number(saved.losses || 0),
+      isGuest: true,
+    };
+  });
+  const [authError, setAuthError] = useState("");
+  const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
   const autoJoinAttemptRef = useRef("");
+  const pendingMatchUpdateRef = useRef(new Set());
+
+  const currentProfile = profile || guestProfile;
+  const isGuestMode = !!guestProfile;
+  const effectivePlayerName = (currentProfile?.displayName || authUser?.displayName || "").trim();
+  const avatarUrlRaw = profile?.photoURL || getUserPhotoURL(authUser) || "";
+  const avatarUrl =
+    typeof avatarUrlRaw === "string" && /^https?:\/\//i.test(avatarUrlRaw.trim())
+      ? avatarUrlRaw.trim()
+      : "";
+
+  useEffect(() => {
+    setAvatarLoadFailed(false);
+  }, [avatarUrl]);
 
   const attemptJoinByUrl = (nameCandidate) => {
     const roomIdFromUrl = getRoomIdFromPathname();
@@ -149,7 +242,9 @@ function App() {
     setRoomId(roomIdFromUrl);
     writeStoredSession({
       ...readStoredSession(),
+      isGuest: isGuestMode,
       playerName: cleanName,
+      profileId: currentProfile?.profileId || readStoredSession().profileId || null,
       reconnectToken,
       roomId: roomIdFromUrl,
     });
@@ -161,14 +256,54 @@ function App() {
   };
 
   useEffect(() => {
+    if (!isFirebaseConfigured || !auth) {
+      setAuthLoading(false);
+      return undefined;
+    }
+
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      setAuthError("");
+      setAuthUser(user);
+      if (!user) {
+        setProfile(null);
+        setAuthLoading(false);
+        return;
+      }
+      setProfileLoading(true);
+      try {
+        if (guestProfile) {
+          setGuestProfile(null);
+        }
+        const loaded = await ensurePlayerProfile(user);
+        setProfile(loaded);
+        writeStoredSession({
+          ...readStoredSession(),
+          isGuest: false,
+          playerName: loaded.displayName,
+          profileId: loaded.profileId,
+          reconnectToken,
+          roomId: readStoredSession().roomId || null,
+        });
+      } catch (error) {
+        console.error("No se pudo cargar perfil Firebase:", error);
+        setAuthError("No se pudo cargar tu perfil de jugador.");
+      } finally {
+        setProfileLoading(false);
+        setAuthLoading(false);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [guestProfile, reconnectToken]);
+
+  useEffect(() => {
     function onConnect() {
       setConnected(true);
       socket.emit("rooms:list");
       const saved = readStoredSession();
       const roomIdFromUrl = getRoomIdFromPathname();
-      // URL manda: solo autojoin en /mesa/CODIGO (no en raiz).
       if (roomIdFromUrl && reconnectToken) {
-        const preferredName = (saved?.playerName || playerName || "").trim();
+        const preferredName = (effectivePlayerName || saved?.playerName || "").trim();
         attemptJoinByUrl(preferredName);
       }
     }
@@ -187,7 +322,9 @@ function App() {
       setGameState(nextGameState);
       writeStoredSession({
         ...readStoredSession(),
-        playerName: playerName || readStoredSession().playerName || "",
+        isGuest: isGuestMode,
+        playerName: effectivePlayerName || readStoredSession().playerName || "",
+        profileId: currentProfile?.profileId || readStoredSession().profileId || null,
         reconnectToken,
         roomId: nextRoomId,
       });
@@ -198,7 +335,9 @@ function App() {
       setRoomId(null);
       writeStoredSession({
         ...readStoredSession(),
-        playerName,
+        isGuest: isGuestMode,
+        playerName: effectivePlayerName,
+        profileId: currentProfile?.profileId || readStoredSession().profileId || null,
         reconnectToken,
         roomId: null,
       });
@@ -218,22 +357,23 @@ function App() {
       socket.off("game:start", onGameStart);
       socket.off("match:return-roomlist", onReturnRoomList);
     };
-  }, [playerName, reconnectToken]);
+  }, [currentProfile?.profileId, effectivePlayerName, isGuestMode, reconnectToken]);
 
   useEffect(() => {
-    // Si abren /mesa/CODIGO sin nombre en cache, al escribir nombre entra.
-    attemptJoinByUrl(playerName);
-  }, [playerName, connected, gameState]);
+    attemptJoinByUrl(effectivePlayerName);
+  }, [effectivePlayerName, connected, gameState]);
 
   useEffect(() => {
     writeStoredSession({
       ...readStoredSession(),
-      playerName,
+      isGuest: isGuestMode,
+      playerName: effectivePlayerName,
+      profileId: currentProfile?.profileId || readStoredSession().profileId || null,
       reconnectToken,
       roomId,
     });
     setUrlForRoom(roomId);
-  }, [playerName, reconnectToken, roomId]);
+  }, [currentProfile?.profileId, effectivePlayerName, isGuestMode, reconnectToken, roomId]);
 
   useEffect(() => {
     const htmlEl = document.documentElement;
@@ -255,16 +395,67 @@ function App() {
     };
   }, [gameState]);
 
+  useEffect(() => {
+    if (!db || !authUser || !profile || !gameState?.matchEnded || !gameState?.matchWinnerId) return;
+
+    const players = Array.isArray(gameState.players) ? gameState.players : [];
+    const meBySocket = players.find((p) => p.id === socket.id) || null;
+    const meByToken =
+      reconnectToken ? players.find((p) => p.reconnectToken === reconnectToken) || null : null;
+    const myPlayerId = meBySocket?.id || meByToken?.id || null;
+    if (!myPlayerId) return;
+
+    const fingerprint = buildMatchFingerprint(roomId, gameState);
+    const counted = readCountedMatches();
+    if (counted.includes(fingerprint) || pendingMatchUpdateRef.current.has(fingerprint)) return;
+    pendingMatchUpdateRef.current.add(fingerprint);
+
+    const iWon =
+      gameState.mode === "2vs2"
+        ? isSameTeamInState(gameState, myPlayerId, gameState.matchWinnerId)
+        : myPlayerId === gameState.matchWinnerId;
+
+    const profileRef = doc(db, "players", authUser.uid);
+    updateDoc(profileRef, {
+      wins: increment(iWon ? 1 : 0),
+      losses: increment(iWon ? 0 : 1),
+      updatedAt: serverTimestamp(),
+    })
+      .then(() => {
+        setProfile((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            wins: Number(prev.wins || 0) + (iWon ? 1 : 0),
+            losses: Number(prev.losses || 0) + (iWon ? 0 : 1),
+          };
+        });
+        const nextCounted = [...counted, fingerprint].slice(-20);
+        writeCountedMatches(nextCounted);
+        pendingMatchUpdateRef.current.delete(fingerprint);
+      })
+      .catch((error) => {
+        console.error("No se pudo actualizar W/L en Firebase:", error);
+        pendingMatchUpdateRef.current.delete(fingerprint);
+      });
+  }, [authUser, db, gameState, profile, reconnectToken, roomId]);
+
   const joinRoom = (nextRoomId) => {
-    if (!playerName.trim()) return;
+    if (!effectivePlayerName.trim()) return;
     setRoomId(nextRoomId);
     writeStoredSession({
       ...readStoredSession(),
-      playerName,
+      isGuest: isGuestMode,
+      playerName: effectivePlayerName,
+      profileId: currentProfile?.profileId || readStoredSession().profileId || null,
       reconnectToken,
       roomId: nextRoomId,
     });
-    socket.emit("room:join", { roomId: nextRoomId, playerName, reconnectToken });
+    socket.emit("room:join", {
+      roomId: nextRoomId,
+      playerName: effectivePlayerName,
+      reconnectToken,
+    });
   };
 
   const leaveToRoomList = () => {
@@ -275,12 +466,152 @@ function App() {
     setRoomId(null);
     writeStoredSession({
       ...readStoredSession(),
-      playerName,
+      isGuest: isGuestMode,
+      playerName: effectivePlayerName,
+      profileId: currentProfile?.profileId || readStoredSession().profileId || null,
       reconnectToken,
       roomId: null,
     });
     socket.emit("rooms:list");
   };
+
+  const signInWithGoogle = async () => {
+    if (!isFirebaseConfigured || !auth || !googleProvider) return;
+    setAuthError("");
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error) {
+      const authCode = String(error?.code || "");
+      const fallbackToRedirect =
+        authCode.includes("popup-blocked") ||
+        authCode.includes("popup-closed-by-user") ||
+        authCode.includes("operation-not-supported-in-this-environment");
+      if (fallbackToRedirect) {
+        try {
+          await signInWithRedirect(auth, googleProvider);
+          return;
+        } catch (redirectError) {
+          console.error("Error login Google (redirect):", redirectError);
+        }
+      }
+      console.error("Error login Google:", error);
+      setAuthError("No se pudo iniciar sesión con Google.");
+    }
+  };
+
+  const startAnonymousSession = () => {
+    const guestName = `Invitado ${Math.floor(100 + Math.random() * 900)}`;
+    const guest = {
+      uid: null,
+      email: "",
+      displayName: guestName,
+      photoURL: "",
+      profileId: generateGuestProfileId(),
+      realMoneyAccumulated: 0,
+      fantasyMoneyAccumulated: 0,
+      wins: 0,
+      losses: 0,
+      isGuest: true,
+    };
+    setAuthError("");
+    setGuestProfile(guest);
+    setProfile(null);
+    writeStoredSession({
+      ...readStoredSession(),
+      isGuest: true,
+      playerName: guest.displayName,
+      profileId: guest.profileId,
+      reconnectToken,
+      roomId: readStoredSession().roomId || null,
+    });
+  };
+
+  const logout = async () => {
+    if (isGuestMode) {
+      setGuestProfile(null);
+      setProfile(null);
+      setAuthUser(null);
+      setGameState(null);
+      setRoomId(null);
+      socket.emit("room:leave");
+      socket.emit("rooms:list");
+      writeStoredSession({
+        ...readStoredSession(),
+        isGuest: false,
+        playerName: "",
+        profileId: null,
+        roomId: null,
+      });
+      return;
+    }
+    if (!auth) return;
+    try {
+      await signOut(auth);
+      setGameState(null);
+      setRoomId(null);
+      writeStoredSession({
+        ...readStoredSession(),
+        isGuest: false,
+        roomId: null,
+      });
+      socket.emit("room:leave");
+      socket.emit("rooms:list");
+    } catch (error) {
+      console.error("Error cerrando sesión:", error);
+      setAuthError("No se pudo cerrar sesión.");
+    }
+  };
+
+  if (authLoading || profileLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-emerald-950 text-emerald-100">
+        Cargando sesión...
+      </div>
+    );
+  }
+
+  if ((!authUser || !profile) && !isGuestMode) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-emerald-900 via-emerald-950 to-emerald-950 px-4 py-10 text-emerald-50">
+        <div className="mx-auto max-w-md rounded-2xl border border-emerald-300/20 bg-emerald-900/45 p-6 text-center shadow-[0_16px_40px_rgba(0,0,0,0.32)]">
+          <img
+            src={logo}
+            alt="Logo Truco Venezolano"
+            className="mx-auto h-24 w-24 rounded-xl object-contain"
+          />
+          <h1 className="mt-4 text-3xl font-extrabold">
+            <span className="bg-gradient-to-r from-amber-200 via-yellow-200 to-amber-400 bg-clip-text text-transparent">
+              Truco Venezolano
+            </span>
+          </h1>
+          <p className="mt-3 text-sm text-emerald-100/80">
+            Inicia sesión con Google o entra como anónimo para jugar.
+          </p>
+          <button
+            type="button"
+            onClick={signInWithGoogle}
+            disabled={!isFirebaseConfigured}
+            className="mt-6 rounded-full bg-yellow-400 px-5 py-2 text-sm font-semibold text-emerald-950 transition hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Iniciar sesión con Google
+          </button>
+          <button
+            type="button"
+            onClick={startAnonymousSession}
+            className="mt-3 rounded-full border border-emerald-300/30 bg-emerald-800/60 px-5 py-2 text-sm font-semibold text-emerald-50 transition hover:bg-emerald-700/70"
+          >
+            Entrar como anónimo
+          </button>
+          {!isFirebaseConfigured ? (
+            <p className="mt-2 text-xs text-amber-200/90">
+              Google Auth deshabilitado: faltan variables `VITE_FIREBASE_*`.
+            </p>
+          ) : null}
+          {authError ? <p className="mt-3 text-sm text-red-300">{authError}</p> : null}
+        </div>
+      </div>
+    );
+  }
 
   if (gameState) {
     return (
@@ -288,6 +619,7 @@ function App() {
         key={roomId || "mesa"}
         roomId={roomId}
         gameState={gameState}
+        myAvatarUrl={avatarUrl}
         onLeaveToRoomList={leaveToRoomList}
       />
     );
@@ -297,9 +629,9 @@ function App() {
   const rooms2v2 = rooms.filter((room) => room.mode === "2vs2");
   const needsScroll1v1 = rooms1v1.length > 3;
   const needsScroll2v2 = rooms2v2.length > 3;
-  const totalMatches = Number(dummyProfile.wins || 0) + Number(dummyProfile.losses || 0);
+  const totalMatches = Number(currentProfile?.wins || 0) + Number(currentProfile?.losses || 0);
   const safeTotalMatches = Math.max(1, totalMatches);
-  const winPct = Math.round((Number(dummyProfile.wins || 0) / safeTotalMatches) * 100);
+  const winPct = Math.round((Number(currentProfile?.wins || 0) / safeTotalMatches) * 100);
   const lossPct = 100 - winPct;
   const winDeg = Math.round((winPct / 100) * 360);
 
@@ -310,8 +642,8 @@ function App() {
         player.id === socket.id ||
         (!!reconnectToken && player.reconnectToken === reconnectToken)
     );
-    const canReenter = !!playerName.trim() && isMySeat;
-    const canJoin = !!playerName.trim() && (!isFull || canReenter);
+    const canReenter = !!effectivePlayerName.trim() && isMySeat;
+    const canJoin = !!effectivePlayerName.trim() && (!isFull || canReenter);
     const statusLabel = isFull ? "en juego" : "abierto";
     const enterLabel = canReenter ? "Regresar al juego" : isFull ? "Mesa llena" : "Entrar";
 
@@ -333,7 +665,7 @@ function App() {
 
         <div className="mb-3 flex items-center justify-between gap-2 text-xs sm:text-sm">
           <span className="rounded-full border border-cyan-300/20 bg-cyan-800/45 px-2.5 py-0.5 font-medium text-cyan-100">
-            Modo: {room.allowBots ? "2vs2 bots" : room.mode}
+            Modo: {room.allowBots ? `${room.mode} bots` : room.mode}
           </span>
           <span className="font-medium text-emerald-100/90">
             Jugadores: {room.players.length}/{room.maxPlayers}
@@ -370,10 +702,6 @@ function App() {
             {connected ? "Conectado" : "Desconectado"}
           </div>
 
-          <div className="mb-3 flex justify-center">
-            
-          </div>
-
           <div className="mb-3 flex items-center justify-left">
             <img
               src={logo}
@@ -388,26 +716,37 @@ function App() {
           </div>
 
           <div className="mx-auto mt-1 flex w-full max-w-sm items-center gap-3 rounded-xl border border-emerald-300/25 bg-emerald-950/55 px-3 py-2.5">
-            
             <div className="min-w-0 flex-1">
               <div className="flex gap-2">
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-700 text-sm font-bold text-emerald-50">
-                  {playerName.slice(0, 1).toUpperCase()}
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-700 text-sm font-bold text-emerald-50 overflow-hidden">
+                  {avatarUrl && !avatarLoadFailed ? (
+                    <img
+                      src={avatarUrl}
+                      alt="Avatar"
+                      className="h-full w-full object-cover"
+                      referrerPolicy="no-referrer"
+                      onError={() => setAvatarLoadFailed(true)}
+                    />
+                  ) : (
+                    effectivePlayerName.slice(0, 1).toUpperCase()
+                  )}
                 </div>
                 <div>
-                  <p className="truncate text-sm font-semibold text-emerald-50">{playerName}</p>
-              <p className="text-xs text-emerald-200/75">ID: {dummyProfile.id}</p>
+                  <p className="truncate text-sm font-semibold text-emerald-50">{effectivePlayerName}</p>
+                  <p className="text-xs text-emerald-200/75">ID: {currentProfile?.profileId || "-"}</p>
                 </div>
-              
-            </div>
-              
-              
+              </div>
+
               <div className="mt-1 grid grid-cols-2 gap-2 text-[11px] text-emerald-100/85">
                 <span className="rounded-md bg-emerald-900/55 px-2 py-1">
-                  Real: ${dummyProfile.realMoneyAccumulated?.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  Real: $
+                  {Number(currentProfile?.realMoneyAccumulated || 0).toLocaleString("en-US", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
                 </span>
                 <span className="rounded-md bg-emerald-900/55 px-2 py-1">
-                  Fantasía: ${Number(dummyProfile.fantasyMoneyAccumulated || 0).toLocaleString("en-US")}
+                  Fantasía: ${Number(currentProfile?.fantasyMoneyAccumulated || 0).toLocaleString("en-US")}
                 </span>
               </div>
             </div>
@@ -425,14 +764,24 @@ function App() {
                 </div>
               </div>
               <div className="mt-1 grid grid-cols-2 gap-1 text-[10px]">
-                <span className="rounded  px-0.5 py-1 text-center text-emerald-300">
-                  {dummyProfile.wins || 0}W
+                <span className="rounded px-0.5 py-1 text-center text-emerald-300">
+                  {currentProfile?.wins || 0}W
                 </span>
-                <span className="rounded  px-0.5 py-1 text-center text-red-300">
-                  {dummyProfile.losses || 0}L
+                <span className="rounded px-0.5 py-1 text-center text-red-300">
+                  {currentProfile?.losses || 0}L
                 </span>
               </div>
             </div>
+          </div>
+
+          <div className="mt-3 flex justify-end">
+            <button
+              type="button"
+              onClick={logout}
+              className="rounded-full border border-emerald-300/25 bg-emerald-900/45 px-4 py-1.5 text-xs font-semibold text-emerald-100 transition hover:bg-emerald-800/55"
+            >
+              {isGuestMode ? "Salir invitado" : "Cerrar sesión"}
+            </button>
           </div>
         </header>
 
@@ -498,7 +847,7 @@ function App() {
           Gestiona tus partidas de Truco Venezolano
         </p>
 
-        <div className="mt-2 flex justify-center pb-4">
+        <div className="mt-2 flex justify-center gap-2 pb-4">
           <button
             type="button"
             onClick={clearLocalSessionAndReload}

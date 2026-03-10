@@ -1754,6 +1754,7 @@ io.on("connection", (socket) => {
       emitGameUpdate(roomId, gameState);
       return;
     }
+    if (pendingFlorEnvido) return;
 
     const pendingEnvido = gameState.envido?.status === "pending";
     if (pendingEnvido && isBotPlayerId(gameState.envido?.responderId)) {
@@ -1835,6 +1836,7 @@ io.on("connection", (socket) => {
       emitGameUpdate(roomId, gameState);
       return;
     }
+    if (pendingEnvido) return;
 
     const pendingTruco = gameState.truco?.status === "pending";
     if (pendingTruco && isBotPlayerId(gameState.truco?.responderId)) {
@@ -1923,6 +1925,7 @@ io.on("connection", (socket) => {
       emitGameUpdate(roomId, gameState);
       return;
     }
+    if (pendingTruco) return;
 
     if (gameState.firstHandTie && gameState.pardaPhase === "selecting" && isBotPlayerId(gameState.turn)) {
       const botId = gameState.turn;

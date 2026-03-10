@@ -2,7 +2,7 @@
 import { socket } from "../socket";
 import { getDeckCard, preloadDeckAssets, renderBackCard, renderCard } from "./deck";
 
-function Mesa({ roomId, gameState, onLeaveToRoomList }) {
+function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
   const [state, setState] = useState(gameState);
   const stateRef = useRef(gameState);
   const [message, setMessage] = useState("");
@@ -14,6 +14,16 @@ function Mesa({ roomId, gameState, onLeaveToRoomList }) {
   const [pardaDraft, setPardaDraft] = useState([]);
   const [showEnvidoStoneSlider, setShowEnvidoStoneSlider] = useState(false);
   const [envidoStoneRaise, setEnvidoStoneRaise] = useState(2);
+  const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
+
+  const safeAvatarUrl =
+    typeof myAvatarUrl === "string" && /^https?:\/\//i.test(myAvatarUrl.trim())
+      ? myAvatarUrl.trim()
+      : "";
+
+  useEffect(() => {
+    setAvatarLoadFailed(false);
+  }, [safeAvatarUrl]);
 
   useEffect(() => {
     preloadDeckAssets();
@@ -152,6 +162,7 @@ function Mesa({ roomId, gameState, onLeaveToRoomList }) {
   const nsTeamNames = nsTeamIds.map((id) => nameById.get(id)).filter(Boolean).join(" / ");
   const eoTeamNames = eoTeamIds.map((id) => nameById.get(id)).filter(Boolean).join(" / ");
   const hasTeamScore =
+    state.mode === "2vs2" &&
     typeof state.score?.team1 === "number" &&
     typeof state.score?.team2 === "number";
   const nsTeamPoints = hasTeamScore
@@ -938,7 +949,7 @@ function Mesa({ roomId, gameState, onLeaveToRoomList }) {
         </div>
       </div>
 
-      <div className="fixed bottom-4 right-2 z-50 w-[min(96vw,240px)] sm:w-[196px] sm:translate-x-0">
+      <div className="fixed bottom-4 right-2 z-50 w-[min(96vw,240px)] ">
         <div className="flex flex-col gap-y-0.5">
                     <div
             className={`fixed inset-0 z-[80] transition ${
@@ -1147,8 +1158,18 @@ function Mesa({ roomId, gameState, onLeaveToRoomList }) {
 
         <div className="mt-0.5 rounded-lg bg-slate-50 p-2.5 text-slate-700 shadow-[0_8px_18px_rgba(0,0,0,0.35)] sm:p-2">
           <div className="mb-2 flex items-center gap-2 sm:mb-1.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#0d6b50] text-sm font-bold text-white sm:h-8 sm:w-8 sm:text-xs">
-              {(me?.name || "J").slice(0, 1).toUpperCase()}
+            <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-[#0d6b50] text-sm font-bold text-white sm:h-8 sm:w-8 sm:text-xs">
+              {safeAvatarUrl && !avatarLoadFailed ? (
+                <img
+                  src={safeAvatarUrl}
+                  alt="Avatar"
+                  className="h-full w-full object-cover"
+                  referrerPolicy="no-referrer"
+                  onError={() => setAvatarLoadFailed(true)}
+                />
+              ) : (
+                (me?.name || "J").slice(0, 1).toUpperCase()
+              )}
             </div>
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-semibold leading-tight">{me?.name || "Jugador"}</div>

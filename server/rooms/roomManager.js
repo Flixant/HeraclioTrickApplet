@@ -71,6 +71,18 @@ function createInitialRooms() {
     allowBots: true,
   };
 
+  const botDuelRoomId = "BOTDUEL";
+  used.add(botDuelRoomId);
+  generatedRooms[botDuelRoomId] = {
+    id: botDuelRoomId,
+    mode: "1vs1",
+    maxPlayers: 2,
+    players: [],
+    status: "waiting",
+    gameState: null,
+    allowBots: true,
+  };
+
   return generatedRooms;
 }
 
