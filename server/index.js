@@ -2381,7 +2381,7 @@ io.on("connection", (socket) => {
 
     gameState.flor.leyByPlayer[socket.id] = true;
     const me = gameState.players.find((p) => p.id === socket.id);
-    emitLockedMessage(roomId, gameState, `${me?.name || "Jugador"} juega a ley`);
+    emitLockedMessage(roomId, gameState, `${me?.name || "Jugador"}: a ley`);
     emitGameUpdate(roomId, gameState);
   });
 
