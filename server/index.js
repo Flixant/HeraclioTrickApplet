@@ -1032,6 +1032,16 @@ io.on("connection", (socket) => {
       clearRoomBotRematchVoteTimers(roomId);
       const starterId = getNextRoundStarterId(gameState) || gameState.roundStarter || seatedIds[0];
       startGame.redealRound(room, starterId);
+
+      // Nueva partida: reiniciar marcador global a 0 (1v1 y 2v2).
+      if (room.gameState) {
+        room.gameState.pointsByPlayer = room.gameState.pointsByPlayer || {};
+        for (const playerId of seatedIds) {
+          room.gameState.pointsByPlayer[playerId] = 0;
+        }
+        room.gameState.score = { team1: 0, team2: 0 };
+      }
+
       room.status = room.players.length === room.maxPlayers ? "full" : "waiting";
       io.to(roomId).emit("server:message", "Todos confirmaron: comienza una nueva partida");
       emitGameUpdate(roomId, room.gameState);
