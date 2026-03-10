@@ -87,6 +87,10 @@ export default function RightActionPanel({
     canCallEnvidoForCard,
     canCallFlor,
     onCallEnvido,
+    turnTimerPlayerId,
+    turnTimerRemainingMs,
+    turnTimerDurationMs,
+    myPlayerId,
   } = playerCard;
 
   return (
@@ -328,6 +332,10 @@ export default function RightActionPanel({
         canCallEnvido={canCallEnvidoForCard}
         canCallFlor={canCallFlor}
         onCallEnvido={onCallEnvido}
+        turnTimerPlayerId={turnTimerPlayerId}
+        turnTimerRemainingMs={turnTimerRemainingMs}
+        turnTimerDurationMs={turnTimerDurationMs}
+        myPlayerId={myPlayerId}
       />
     </div>
   );

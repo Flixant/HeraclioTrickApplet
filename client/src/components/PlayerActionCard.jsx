@@ -25,22 +25,57 @@ function PlayerActionCard({
   canCallEnvido,
   canCallFlor,
   onCallEnvido,
+  turnTimerPlayerId,
+  turnTimerRemainingMs,
+  turnTimerDurationMs,
+  myPlayerId,
 }) {
+  const showTurnCountdownRing =
+    !!myPlayerId &&
+    turnTimerPlayerId === myPlayerId &&
+    Number(turnTimerRemainingMs || 0) > 0 &&
+    Number(turnTimerDurationMs || 0) > 0;
+  const ringProgress = showTurnCountdownRing
+    ? Math.max(0, Math.min(1, Number(turnTimerRemainingMs || 0) / Number(turnTimerDurationMs || 45000)))
+    : 0;
+  const circumference = 2 * Math.PI * 18;
+  const ringOffset = circumference * (1 - ringProgress);
+  const ringColorClass =
+    ringProgress <= 0.2 ? "text-rose-500" : ringProgress <= 0.45 ? "text-amber-400" : "text-emerald-400";
   return (
     <div className="mt-0.5 rounded-lg bg-slate-50 p-2.5 text-slate-700 shadow-[0_8px_18px_rgba(0,0,0,0.35)] sm:p-2">
       <div className="mb-2 flex items-center gap-2 sm:mb-1.5">
-        <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-[#0d6b50] text-sm font-bold text-white sm:h-8 sm:w-8 sm:text-xs">
-          {avatarUrl && !avatarLoadFailed ? (
-            <img
-              src={avatarUrl}
-              alt="Avatar"
-              className="h-full w-full object-cover"
-              referrerPolicy="no-referrer"
-              onError={onAvatarError}
-            />
-          ) : (
-            (playerName || "J").slice(0, 1).toUpperCase()
+        <div className="relative h-9 w-9 sm:h-8 sm:w-8">
+          {showTurnCountdownRing && (
+            <svg className={`pointer-events-none absolute -inset-[3px] z-10 ${ringColorClass}`} viewBox="0 0 42 42">
+              <circle cx="21" cy="21" r="18" fill="none" stroke="currentColor" strokeOpacity="0.22" strokeWidth="2.8" />
+              <circle
+                cx="21"
+                cy="21"
+                r="18"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.8"
+                strokeLinecap="round"
+                strokeDasharray={circumference}
+                strokeDashoffset={ringOffset}
+                transform="rotate(-90 21 21)"
+              />
+            </svg>
           )}
+          <div className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-[#0d6b50] text-sm font-bold text-white sm:text-xs">
+            {avatarUrl && !avatarLoadFailed ? (
+              <img
+                src={avatarUrl}
+                alt="Avatar"
+                className="h-full w-full object-cover"
+                referrerPolicy="no-referrer"
+                onError={onAvatarError}
+              />
+            ) : (
+              (playerName || "J").slice(0, 1).toUpperCase()
+            )}
+          </div>
         </div>
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold leading-tight">{playerName || "Jugador"}</div>
@@ -131,4 +166,3 @@ function PlayerActionCard({
 }
 
 export default PlayerActionCard;
-

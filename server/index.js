@@ -54,6 +54,7 @@ function emitRooms() {
 function emitGameUpdate(roomId, gameState) {
   if (!roomId || !gameState) return;
   gameState.stateVersion = (Number(gameState.stateVersion) || 0) + 1;
+  scheduleRoomTurnPlayTimeout(roomId, gameState);
   io.to(roomId).emit("game:update", { roomId, gameState });
 }
 
@@ -71,18 +72,295 @@ const MESSAGE_LOCK_MS = 1700;
 const GAME_TARGET = 12;
 const TRUCO_RAISE_WINDOW_MS = 2000;
 const BOT_PREFIX = "bot:";
+const BOT_NAMES = ["Leonardo", "Donatello", "Raphael", "Michelangelo"];
 const BOT_TICK_MS = 1100;
 const BOT_PENDING_RESPONSE_MIN_MS = 2800;
 const BOT_PENDING_RESPONSE_JITTER_MS = 2400;
-const RECONNECT_GRACE_MS = 45000;
+const TURN_PLAY_TIMEOUT_MS = 45000;
 let botLoopStarted = false;
 let botsDebugEnabled = false;
 const PERF_LOG_ENABLED = String(process.env.PERF_LOG || "") === "1";
+const TURN_TIMER_DEBUG = String(process.env.TURN_TIMER_DEBUG || "") === "1";
 const botNextActionAt = new Map();
 const botPendingReadyAt = new Map();
 const botRematchVoteTimers = new Map();
 const roomMessageTimers = new Map();
 const disconnectedSeatTimeouts = new Map();
+const roomTurnPlayTimers = new Map();
+
+function turnTimerLog(...args) {
+  if (!TURN_TIMER_DEBUG) return;
+  console.log("[TURN-TIMER]", ...args);
+}
+
+function clearTurnTimerState(gameState) {
+  if (!gameState) return;
+  gameState.turnTimer = {
+    playerId: null,
+    startedAt: 0,
+    endsAt: 0,
+    durationMs: TURN_PLAY_TIMEOUT_MS,
+  };
+}
+
+function clearRoomTurnPlayTimer(roomId) {
+  const existing = roomTurnPlayTimers.get(roomId);
+  if (!existing) return;
+  clearTimeout(existing.timeoutId);
+  roomTurnPlayTimers.delete(roomId);
+}
+
+function ensureAwayByPlayer(gameState) {
+  if (!gameState) return;
+  if (!gameState.awayByPlayer || typeof gameState.awayByPlayer !== "object") {
+    gameState.awayByPlayer = {};
+  }
+  const players = Array.isArray(gameState.players) ? gameState.players : [];
+  for (const player of players) {
+    const id = player?.id;
+    if (!id) continue;
+    if (typeof gameState.awayByPlayer[id] !== "boolean") {
+      gameState.awayByPlayer[id] = false;
+    }
+  }
+}
+
+function resolveAwayForfeit(roomId, absentPlayerId, reason = "ausencia") {
+  const room = getRoom(roomId);
+  const gameState = room?.gameState;
+  if (!room || !gameState || gameState.matchEnded || !absentPlayerId) return false;
+  const loser = gameState.players.find((p) => p.id === absentPlayerId);
+  if (!loser) return false;
+
+  const opponentId =
+    getOpposingResponderId(gameState, absentPlayerId) ||
+    getOpposingPlayerIds(gameState, absentPlayerId)?.[0] ||
+    null;
+  if (!opponentId) return false;
+
+  if (gameState.mode === "2vs2") {
+    ensureScoreState(gameState);
+    const loserTeam = getScoreTeamField(gameState, absentPlayerId);
+    if (loserTeam === "team1") {
+      gameState.score.team2 = Math.max(Number(gameState.score.team2 || 0), GAME_TARGET);
+    } else {
+      gameState.score.team1 = Math.max(Number(gameState.score.team1 || 0), GAME_TARGET);
+    }
+  } else {
+    gameState.pointsByPlayer[opponentId] = Math.max(
+      Number(gameState.pointsByPlayer[opponentId] || 0),
+      GAME_TARGET
+    );
+  }
+
+  const winnerLabel = getWinnerLabel(gameState, opponentId);
+  emitLockedMessage(
+    roomId,
+    gameState,
+    `${loser?.name || "Jugador"}: abandono la mesa por 45s (${reason}). ${winnerLabel} gana la partida`
+  );
+  gameState.matchEnded = true;
+  gameState.matchWinnerId = opponentId;
+  gameState.matchEndedAt = Date.now();
+  gameState.rematch = buildRematchState(gameState);
+  room.status = "finished";
+  clearRoomTurnPlayTimer(roomId);
+  emitRooms();
+  emitGameUpdate(roomId, gameState);
+  return true;
+}
+
+function findAwayPlayerForTimerForfeit(gameState) {
+  ensureAwayByPlayer(gameState);
+  const players = Array.isArray(gameState?.players) ? gameState.players : [];
+  const currentTurnId = gameState?.turn || null;
+  if (currentTurnId && !isBotPlayerId(currentTurnId)) {
+    const currentTurnPlayer = players.find((p) => p.id === currentTurnId);
+    if (gameState.awayByPlayer[currentTurnId] || currentTurnPlayer?.connected === false) {
+      return currentTurnId;
+    }
+  }
+  const firstAway = players.find(
+    (p) =>
+      p?.id &&
+      !isBotPlayerId(p.id) &&
+      (gameState.awayByPlayer[p.id] || p.connected === false)
+  );
+  return firstAway?.id || null;
+}
+
+function getTurnTimeoutArmState(room, gameState) {
+  if (!room || !gameState) return { canArm: false, retryMs: null };
+  const turnId = gameState.turn;
+  if (!turnId || isBotPlayerId(turnId)) return { canArm: false, retryMs: null };
+  if (gameState.matchEnded || gameState.roundEnding) return { canArm: false, retryMs: null };
+  if (isCanto11Active(gameState)) return { canArm: false, retryMs: null };
+  if (isInputLocked(gameState)) {
+    const unlockAt = Number(gameState.inputLockedUntil || 0);
+    const wait = Math.max(80, unlockAt - Date.now() + 30);
+    return { canArm: false, retryMs: wait };
+  }
+  if (gameState.pendingMazo?.callerId) return { canArm: false, retryMs: null };
+  if (isTrucoRaiseWindowOpen(gameState)) {
+    const until = Number(gameState.truco?.raiseWindowUntil || 0);
+    const wait = Math.max(80, until - Date.now() + 30);
+    return { canArm: false, retryMs: wait };
+  }
+  if (gameState.truco?.status === "pending") return { canArm: false, retryMs: null };
+  if (gameState.envido?.status === "pending") return { canArm: false, retryMs: null };
+  if (isFlorEnvidoPending(gameState)) return { canArm: false, retryMs: null };
+  if (gameState.firstHandTie && (gameState.pardaPhase === "selecting" || gameState.pardaPhase === "reveal")) {
+    return { canArm: false, retryMs: null };
+  }
+  const hand = gameState.hands?.[turnId];
+  if (!Array.isArray(hand) || hand.length === 0) return { canArm: false, retryMs: null };
+  return { canArm: true, retryMs: null };
+}
+
+function getLowestRankCardIndex(hand, vira) {
+  if (!Array.isArray(hand) || hand.length === 0) return -1;
+  let bestIndex = 0;
+  let bestRank = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < hand.length; i += 1) {
+    const rank = resolveHandRank(hand[i], vira);
+    if (rank < bestRank) {
+      bestRank = rank;
+      bestIndex = i;
+    }
+  }
+  return bestIndex;
+}
+
+function scheduleRoomTurnPlayTimeout(roomId, gameState) {
+  clearRoomTurnPlayTimer(roomId);
+  const room = getRoom(roomId);
+  const armState = getTurnTimeoutArmState(room, gameState);
+  if (!armState.canArm) {
+    turnTimerLog("skip-arm", {
+      roomId,
+      turn: gameState?.turn || null,
+      retryMs: armState.retryMs || 0,
+      matchEnded: !!gameState?.matchEnded,
+      roundEnding: !!gameState?.roundEnding,
+      canto11: !!isCanto11Active(gameState),
+      inputLocked: !!isInputLocked(gameState),
+      trucoPending: gameState?.truco?.status === "pending",
+      envidoPending: gameState?.envido?.status === "pending",
+    });
+    clearTurnTimerState(gameState);
+    if (armState.retryMs) {
+      const retryId = setTimeout(() => {
+        const retryRoom = getRoom(roomId);
+        const retryGame = retryRoom?.gameState;
+        if (!retryGame) return;
+        turnTimerLog("retry-arm", {
+          roomId,
+          turn: retryGame?.turn || null,
+        });
+        scheduleRoomTurnPlayTimeout(roomId, retryGame);
+        if (
+          retryGame.turnTimer?.playerId &&
+          Number(retryGame.turnTimer?.endsAt || 0) > Date.now()
+        ) {
+          io.to(roomId).emit("game:update", { roomId, gameState: retryGame });
+        }
+      }, armState.retryMs);
+      roomTurnPlayTimers.set(roomId, {
+        timeoutId: retryId,
+        turnId: gameState?.turn || null,
+      });
+    }
+    return;
+  }
+
+  const armedTurnId = gameState.turn;
+  const startedAt = Date.now();
+  const endsAt = startedAt + TURN_PLAY_TIMEOUT_MS;
+  turnTimerLog("armed", {
+    roomId,
+    turn: armedTurnId,
+    startedAt,
+    endsAt,
+    durationMs: TURN_PLAY_TIMEOUT_MS,
+  });
+  gameState.turnTimer = {
+    playerId: armedTurnId,
+    startedAt,
+    endsAt,
+    durationMs: TURN_PLAY_TIMEOUT_MS,
+  };
+  const armedVersion = Number(gameState.stateVersion || 0);
+  const timeoutId = setTimeout(() => {
+    const liveRoom = getRoom(roomId);
+    const liveGame = liveRoom?.gameState;
+    turnTimerLog("expired", {
+      roomId,
+      armedTurnId,
+      currentTurn: liveGame?.turn || null,
+      stateVersion: Number(liveGame?.stateVersion || 0),
+      armedVersion,
+    });
+    if (!getTurnTimeoutArmState(liveRoom, liveGame).canArm) return;
+    if (liveGame.turn !== armedTurnId) return;
+    if (Number(liveGame.turnTimer?.endsAt || 0) !== endsAt) return;
+    if (Number(liveGame.stateVersion || 0) < armedVersion) return;
+
+    const hand = liveGame.hands?.[armedTurnId];
+    const cardIndex = getLowestRankCardIndex(hand, liveGame.vira);
+    if (cardIndex < 0) return;
+
+    const awayForfeitPlayerId = findAwayPlayerForTimerForfeit(liveGame);
+    if (awayForfeitPlayerId) {
+      turnTimerLog("forfeit-away", {
+        roomId,
+        awayForfeitPlayerId,
+        turn: liveGame.turn,
+      });
+      resolveAwayForfeit(roomId, awayForfeitPlayerId, "ausente al vencer timer");
+      return;
+    }
+
+    const playedCount = Math.max(0, 3 - hand.length);
+    const faceDown = playedCount >= 1;
+    const playerSocket = io.sockets.sockets.get(armedTurnId);
+    if (!playerSocket) {
+      turnTimerLog("no-socket", { roomId, armedTurnId });
+      ensureAwayByPlayer(liveGame);
+      liveGame.awayByPlayer[armedTurnId] = true;
+      resolveAwayForfeit(roomId, armedTurnId, "sin conexion al vencer timer");
+      return;
+    }
+    const handlers = playerSocket.listeners("play:card");
+    if (!Array.isArray(handlers) || handlers.length === 0) {
+      turnTimerLog("no-handler", { roomId, armedTurnId });
+      ensureAwayByPlayer(liveGame);
+      liveGame.awayByPlayer[armedTurnId] = true;
+      resolveAwayForfeit(roomId, armedTurnId, "sin handler al vencer timer");
+      return;
+    }
+
+    try {
+      turnTimerLog("auto-play", { roomId, armedTurnId, cardIndex, faceDown });
+      handlers[0].call(playerSocket, { roomId, cardIndex, faceDown });
+    } catch (error) {
+      console.error("Error en auto-jugada por timeout:", error?.message || error);
+    }
+
+    setTimeout(() => {
+      const verifyRoom = getRoom(roomId);
+      const verifyGame = verifyRoom?.gameState;
+      if (!verifyGame) return;
+      if (verifyGame.turn === armedTurnId) {
+        scheduleRoomTurnPlayTimeout(roomId, verifyGame);
+      }
+    }, 150);
+  }, TURN_PLAY_TIMEOUT_MS);
+
+  roomTurnPlayTimers.set(roomId, {
+    timeoutId,
+    turnId: armedTurnId,
+  });
+}
 
 function getSeatTimeoutKey(roomId, playerId) {
   return `${roomId}:${playerId}`;
@@ -139,6 +417,8 @@ function reclaimDisconnectedSeat(room, socket, nextPlayerName, reconnectToken, n
   clearSeatTimeout(room.id, oldId);
 
   room.gameState = replacePlayerIdDeep(room.gameState, oldId, newId);
+  ensureAwayByPlayer(room.gameState);
+  room.gameState.awayByPlayer[newId] = false;
   return true;
 }
 
@@ -2290,7 +2570,7 @@ io.on("connection", (socket) => {
       const n = existingBotCount + i + 1;
       room.players.push({
         id: `${BOT_PREFIX}${room.id}:${n}`,
-        name: `${n}B`,
+        name: BOT_NAMES[(n - 1) % BOT_NAMES.length],
       });
     }
     room.status = room.players.length === room.maxPlayers ? "full" : "waiting";
@@ -3047,10 +3327,17 @@ io.on("connection", (socket) => {
       nextAvatarUrl
     );
     if (reclaimed) {
+      ensureAwayByPlayer(targetRoom.gameState);
+      targetRoom.gameState.awayByPlayer[socket.id] = false;
       socket.join(roomId);
       socket.data.roomId = roomId;
       socket.data.reconnectToken = reconnectToken || null;
+      scheduleRoomTurnPlayTimeout(roomId, targetRoom.gameState);
       socket.emit("game:start", {
+        roomId,
+        gameState: targetRoom.gameState,
+      });
+      socket.emit("game:update", {
         roomId,
         gameState: targetRoom.gameState,
       });
@@ -3074,6 +3361,10 @@ io.on("connection", (socket) => {
     }
 
     ensureBotRoomPlayers(result.room);
+    if (result.room.gameState) {
+      ensureAwayByPlayer(result.room.gameState);
+      result.room.gameState.awayByPlayer[socket.id] = false;
+    }
 
     socket.join(roomId);
     socket.data.roomId = roomId;
@@ -3082,12 +3373,29 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("room:update", result.room);
     emitRooms();
 
+    if (result.room.gameState) {
+      scheduleRoomTurnPlayTimeout(roomId, result.room.gameState);
+      socket.emit("game:start", {
+        roomId,
+        gameState: result.room.gameState,
+      });
+      socket.emit("game:update", {
+        roomId,
+        gameState: result.room.gameState,
+      });
+      return;
+    }
+
     if (result.room.players.length === result.room.maxPlayers && !result.room.gameState) {
       console.log("Mesa llena, iniciando partida:", roomId);
       startGame(result.room);
       activateCanto11IfNeeded(result.room.gameState);
-
+      scheduleRoomTurnPlayTimeout(roomId, result.room.gameState);
       io.to(roomId).emit("game:start", {
+        roomId,
+        gameState: result.room.gameState,
+      });
+      io.to(roomId).emit("game:update", {
         roomId,
         gameState: result.room.gameState,
       });
@@ -3111,6 +3419,29 @@ io.on("connection", (socket) => {
     }
 
     emitRooms();
+  });
+
+  socket.on("room:away", ({ roomId, away }) => {
+    const effectiveRoomId = roomId || socket.data.roomId;
+    if (!effectiveRoomId) return;
+    const room = getRoom(effectiveRoomId);
+    const gameState = room?.gameState;
+    if (!room || !gameState || gameState.matchEnded) return;
+    const me = gameState.players.find((p) => p.id === socket.id);
+    if (!me) return;
+    ensureAwayByPlayer(gameState);
+    const nextAway = !!away;
+    if (gameState.awayByPlayer[socket.id] === nextAway) {
+      return;
+    }
+    gameState.awayByPlayer[socket.id] = nextAway;
+    turnTimerLog("away-flag", {
+      roomId: effectiveRoomId,
+      playerId: socket.id,
+      away: nextAway,
+      turn: gameState.turn,
+    });
+    emitGameUpdate(effectiveRoomId, gameState);
   });
 
   socket.on("debug:set-deck-mode", ({ roomId, onlyBastosEspadas }) => {
@@ -4555,6 +4886,15 @@ io.on("connection", (socket) => {
       socket.emit("server:error", MSG.NOT_TURN);
       return;
     }
+    ensureAwayByPlayer(gameState);
+    gameState.awayByPlayer[socket.id] = false;
+    turnTimerLog("play-card", {
+      roomId,
+      playerId: socket.id,
+      turn: gameState.turn,
+      cardIndex,
+      faceDown: !!faceDown,
+    });
     if (
       gameState.flor?.florEnvidoWindowOpen &&
       gameState.flor?.florEnvidoWindowTurnId === socket.id &&
@@ -4776,25 +5116,17 @@ io.on("connection", (socket) => {
     if (player && room.gameState) {
       player.connected = false;
       player.lastSeenAt = Date.now();
-      const timeoutKey = getSeatTimeoutKey(roomId, socket.id);
+      ensureAwayByPlayer(room.gameState);
+      room.gameState.awayByPlayer[socket.id] = true;
+      turnTimerLog("disconnect-mark-away", {
+        roomId,
+        playerId: socket.id,
+        turn: room.gameState.turn,
+      });
       clearSeatTimeout(roomId, socket.id);
-      const timeout = setTimeout(() => {
-        const liveRoom = getRoom(roomId);
-        if (!liveRoom) return;
-        const stillMissing = liveRoom.players.find(
-          (p) => p.id === socket.id && p.connected === false
-        );
-        if (!stillMissing) return;
-        clearSeatTimeout(roomId, socket.id);
-        const updated = removePlayer(roomId, socket.id);
-        if (updated) {
-          io.to(roomId).emit("room:update", updated);
-        }
-        emitRooms();
-      }, RECONNECT_GRACE_MS);
-      disconnectedSeatTimeouts.set(timeoutKey, timeout);
 
       io.to(roomId).emit("room:update", room);
+      emitGameUpdate(roomId, room.gameState);
       emitRooms();
       return;
     }

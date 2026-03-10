@@ -406,6 +406,11 @@ function App() {
   }, [currentProfile?.profileId, effectivePlayerName, isGuestMode, reconnectToken, roomId]);
 
   useEffect(() => {
+    if (!roomId) return;
+    socket.emit("room:away", { roomId, away: false });
+  }, [roomId]);
+
+  useEffect(() => {
     const htmlEl = document.documentElement;
     const bodyEl = document.body;
     const previousHtmlOverflow = htmlEl.style.overflow;
@@ -510,14 +515,16 @@ function App() {
       reconnectToken,
       avatarUrl,
     });
+    socket.emit("room:away", { roomId: nextRoomId, away: false });
   };
 
   const leaveToRoomList = () => {
     suppressAutoJoinUntilRef.current = Date.now() + 4000;
     autoJoinAttemptRef.current = "";
     window.history.replaceState({}, "", "/");
-    if (roomId) {
-      socket.emit("room:leave");
+    const previousRoomId = roomId;
+    if (previousRoomId) {
+      socket.emit("room:away", { roomId: previousRoomId, away: true });
     }
     setGameState(null);
     setRoomId(null);
@@ -527,7 +534,7 @@ function App() {
       playerName: effectivePlayerName,
       profileId: currentProfile?.profileId || readStoredSession().profileId || null,
       reconnectToken,
-      roomId: null,
+      roomId: previousRoomId || null,
     });
     socket.emit("rooms:list");
   };

@@ -155,11 +155,13 @@ function startGame(room) {
   const pointsByPlayer = {};
   const handWinsByPlayer = {};
   const forcedFaceDownByPlayer = {};
+  const awayByPlayer = {};
 
   for (const playerId of players) {
     pointsByPlayer[playerId] = 0;
     handWinsByPlayer[playerId] = 0;
     forcedFaceDownByPlayer[playerId] = false;
+    awayByPlayer[playerId] = false;
   }
 
   room.status = "playing";
@@ -228,7 +230,14 @@ function startGame(room) {
       responderTurnId: null,
     },
     turn: players[0],
+    turnTimer: {
+      playerId: null,
+      startedAt: 0,
+      endsAt: 0,
+      durationMs: 45000,
+    },
     teams: buildTeams(players, room.mode),
+    awayByPlayer,
     pointsByPlayer,
     handWinsByPlayer,
     forcedFaceDownByPlayer,
@@ -258,6 +267,10 @@ function redealRound(room, starterId) {
     if (typeof gameState.pointsByPlayer?.[playerId] !== "number") {
       gameState.pointsByPlayer = gameState.pointsByPlayer || {};
       gameState.pointsByPlayer[playerId] = 0;
+    }
+    gameState.awayByPlayer = gameState.awayByPlayer || {};
+    if (typeof gameState.awayByPlayer[playerId] !== "boolean") {
+      gameState.awayByPlayer[playerId] = false;
     }
   }
 
@@ -321,6 +334,12 @@ function redealRound(room, starterId) {
     responderTurnId: null,
   };
   gameState.turn = startTurn;
+  gameState.turnTimer = {
+    playerId: null,
+    startedAt: 0,
+    endsAt: 0,
+    durationMs: 45000,
+  };
   gameState.teams = buildTeams(players, room.mode);
   if (!gameState.score || typeof gameState.score.team1 !== "number" || typeof gameState.score.team2 !== "number") {
     gameState.score = {

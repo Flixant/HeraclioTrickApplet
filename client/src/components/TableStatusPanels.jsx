@@ -3,6 +3,8 @@ function TableStatusPanels({
   eoTeamNames,
   nsTeamPoints,
   eoTeamPoints,
+  nsTeamAway,
+  eoTeamAway,
   activeTrucoTitle,
   isTrucoActive,
   activeTrucoLabel,
@@ -22,7 +24,11 @@ function TableStatusPanels({
         <div className="space-y-0.5 sm:space-y-1">
           <div className="flex items-center justify-between rounded-md bg-white/80 px-1 py-0.5 sm:px-1.5 sm:py-1">
             <div className="truncate text-[11px] font-semibold sm:text-xs">
-              <span className="mr-1 inline-block rounded bg-emerald-700 px-1 py-0.5 text-[8px] text-white sm:text-[9px]">
+              <span
+                className={`mr-1 inline-block rounded px-1 py-0.5 text-[8px] text-white sm:text-[9px] ${
+                  nsTeamAway ? "bg-rose-600" : "bg-emerald-700"
+                }`}
+              >
                 E1
               </span>
               {nsTeamNames || "Norte / Sur"}
@@ -31,7 +37,11 @@ function TableStatusPanels({
           </div>
           <div className="flex items-center justify-between rounded-md bg-white/80 px-1 py-0.5 sm:px-1.5 sm:py-1">
             <div className="truncate text-[11px] font-semibold sm:text-xs">
-              <span className="mr-1 inline-block rounded bg-emerald-700 px-1 py-0.5 text-[8px] text-white sm:text-[9px]">
+              <span
+                className={`mr-1 inline-block rounded px-1 py-0.5 text-[8px] text-white sm:text-[9px] ${
+                  eoTeamAway ? "bg-rose-600" : "bg-emerald-700"
+                }`}
+              >
                 E2
               </span>
               {eoTeamNames || "Este / Oeste"}
@@ -71,4 +81,3 @@ function TableStatusPanels({
 }
 
 export default TableStatusPanels;
-

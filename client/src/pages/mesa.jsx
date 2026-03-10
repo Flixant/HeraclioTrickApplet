@@ -105,6 +105,7 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
   const [suppressMessagesForMatchEnd, setSuppressMessagesForMatchEnd] = useState(false);
   const [showHistoryPanel, setShowHistoryPanel] = useState(false);
   const [messageHistory, setMessageHistory] = useState([]);
+  const [nowMs, setNowMs] = useState(Date.now());
   const FLOAT_CLOCK_SIZE = 52;
   const FLOAT_CLOCK_EDGE_GAP = 12;
   const [floatingClockPos, setFloatingClockPos] = useState(() => {
@@ -183,6 +184,24 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
   }, []);
 
   useEffect(() => {
+    if (!roomId) return undefined;
+    const reportAway = () => {
+      const hidden = typeof document !== "undefined" && document.visibilityState !== "visible";
+      socket.emit("room:away", { roomId, away: hidden });
+    };
+    reportAway();
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", reportAway);
+    }
+    return () => {
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", reportAway);
+      }
+      socket.emit("room:away", { roomId, away: true });
+    };
+  }, [roomId]);
+
+  useEffect(() => {
     setState(gameState);
     stateRef.current = gameState;
   }, [gameState]);
@@ -230,6 +249,11 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
     }, Math.max(50, until - Date.now() + 20));
     return () => clearTimeout(timeout);
   }, [state?.uiMessageUntil]);
+
+  useEffect(() => {
+    const interval = setInterval(() => setNowMs(Date.now()), 200);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     setMessage("");
@@ -401,6 +425,9 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
   const eoTeamPoints = hasTeamScore
     ? state.score.team2
     : eoTeamIds.reduce((acc, id) => acc + (state.pointsByPlayer?.[id] ?? 0), 0);
+  const awayByPlayer = state.awayByPlayer || {};
+  const nsTeamAway = nsTeamIds.some((id) => !!awayByPlayer[id]);
+  const eoTeamAway = eoTeamIds.some((id) => !!awayByPlayer[id]);
   const isSameTeamByState = (playerA, playerB) => {
     if (!playerA || !playerB) return false;
     const team1 = Array.isArray(state.teams?.team1) ? state.teams.team1 : [];
@@ -464,6 +491,7 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
   const myHasFlorReservada = !!florState.reservadaByPlayer?.[myPlayerId];
   const myPlayedLey = !!florState.leyByPlayer?.[myPlayerId];
   const myMustConfirmFlorThird = !!florState.requireThirdByPlayer?.[myPlayerId];
+  const myAlreadySangFlor = !!florState.sungByPlayer?.[myPlayerId];
   const florAlreadySung = Object.values(florState.sungByPlayer || {}).some(Boolean);
   const nsTeamSangFlor = nsTeamIds.some((id) => !!florState.sungByPlayer?.[id]);
   const eoTeamSangFlor = eoTeamIds.some((id) => !!florState.sungByPlayer?.[id]);
@@ -560,6 +588,7 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
   const canCallFlor =
     (isMyTurn || myMustConfirmFlorThird) &&
     (isInFirstHand || myPlayedLey || myMustConfirmFlorThird) &&
+    !myAlreadySangFlor &&
     !isTrucoPending &&
     !isEnvidoPending &&
     !isFlorPending &&
@@ -603,30 +632,68 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
     const raw = player?.avatarUrl;
     return typeof raw === "string" && /^https?:\/\//i.test(raw.trim()) ? raw.trim() : "";
   };
+  const activeTurnTimerPlayerId = state?.turnTimer?.playerId || null;
+  const activeTurnTimerEndsAt = Number(state?.turnTimer?.endsAt || 0);
+  const activeTurnTimerDurationMs = Number(state?.turnTimer?.durationMs || 45000);
+  const activeTurnTimerRemainingMs =
+    activeTurnTimerPlayerId && activeTurnTimerEndsAt > 0
+      ? Math.max(0, activeTurnTimerEndsAt - nowMs)
+      : 0;
   const renderSeatAvatar = (player, fallback = "J", sizeClass = "h-9 w-9 text-sm") => {
     const playerId = player?.id || fallback;
     const avatar = getPlayerAvatarUrl(player);
     const failed = !!remoteAvatarLoadFailed[playerId];
+    const showTurnCountdownRing =
+      !!player?.id &&
+      player.id === activeTurnTimerPlayerId &&
+      activeTurnTimerRemainingMs > 0 &&
+      activeTurnTimerDurationMs > 0;
+    const ringProgress = showTurnCountdownRing
+      ? Math.max(0, Math.min(1, activeTurnTimerRemainingMs / activeTurnTimerDurationMs))
+      : 0;
+    const circumference = 2 * Math.PI * 18;
+    const ringOffset = circumference * (1 - ringProgress);
+    const ringColorClass =
+      ringProgress <= 0.2 ? "text-rose-500" : ringProgress <= 0.45 ? "text-amber-400" : "text-emerald-400";
     return (
-      <div
-        className={`mx-auto mb-1 flex items-center justify-center overflow-hidden rounded-full bg-[#0d6b50] font-bold text-white shadow ${sizeClass}`}
-      >
-        {avatar && !failed ? (
-          <img
-            src={avatar}
-            alt={player?.name || "Jugador"}
-            className="h-full w-full object-cover"
-            referrerPolicy="no-referrer"
-            onError={() =>
-              setRemoteAvatarLoadFailed((prev) => ({
-                ...prev,
-                [playerId]: true,
-              }))
-            }
-          />
-        ) : (
-          (player?.name || fallback).slice(0, 1).toUpperCase()
+      <div className={`relative mx-auto mb-1 ${sizeClass}`}>
+        {showTurnCountdownRing && (
+          <svg className={`pointer-events-none absolute -inset-[3px] z-10 ${ringColorClass}`} viewBox="0 0 42 42">
+            <circle cx="21" cy="21" r="18" fill="none" stroke="currentColor" strokeOpacity="0.22" strokeWidth="2.8" />
+            <circle
+              cx="21"
+              cy="21"
+              r="18"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.8"
+              strokeLinecap="round"
+              strokeDasharray={circumference}
+              strokeDashoffset={ringOffset}
+              transform="rotate(-90 21 21)"
+            />
+          </svg>
         )}
+        <div
+          className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-[#0d6b50] font-bold text-white shadow"
+        >
+          {avatar && !failed ? (
+            <img
+              src={avatar}
+              alt={player?.name || "Jugador"}
+              className="h-full w-full object-cover"
+              referrerPolicy="no-referrer"
+              onError={() =>
+                setRemoteAvatarLoadFailed((prev) => ({
+                  ...prev,
+                  [playerId]: true,
+                }))
+              }
+            />
+          ) : (
+            (player?.name || fallback).slice(0, 1).toUpperCase()
+          )}
+        </div>
       </div>
     );
   };
@@ -913,6 +980,9 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
 
   const chooseExit = () => {
     socket.emit("match:decision", { roomId, decision: "exit" });
+    onLeaveToRoomList?.();
+  };
+  const leaveLobbyNow = () => {
     onLeaveToRoomList?.();
   };
 
@@ -1326,10 +1396,26 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
     canCallEnvidoForCard: canCallEnvido,
     canCallFlor,
     onCallEnvido: () => callEnvido(),
+    turnTimerPlayerId: activeTurnTimerPlayerId,
+    turnTimerRemainingMs: activeTurnTimerRemainingMs,
+    turnTimerDurationMs: activeTurnTimerDurationMs,
+    myPlayerId,
   };
 
   return (
     <div className="relative h-screen overflow-hidden bg-emerald-950 px-14 pt-10 text-white sm:px-6 sm:py-6">
+      <button
+        type="button"
+        onClick={leaveLobbyNow}
+        disabled={isMatchEnded}
+        className={`fixed bottom-3 left-3 z-[115] rounded-full px-4 py-2 text-xs font-semibold shadow-lg transition sm:text-sm ${
+          isMatchEnded
+            ? "cursor-not-allowed bg-slate-500/80 text-slate-200"
+            : "bg-emerald-800/95 text-white hover:bg-emerald-700"
+        }`}
+      >
+        Salir al lobby
+      </button>
       {matchModalVisible && (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/55 px-4 [animation:mesaModalBackdropIn_220ms_ease-out_forwards]">
           <div className="w-full max-w-md rounded-2xl border border-emerald-200/30 bg-slate-900/95 p-5 text-white shadow-2xl [animation:mesaModalCardIn_280ms_cubic-bezier(0.16,1,0.3,1)_forwards]">
@@ -1500,6 +1586,8 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
         eoTeamNames={eoTeamNames}
         nsTeamPoints={nsTeamPoints}
         eoTeamPoints={eoTeamPoints}
+        nsTeamAway={nsTeamAway}
+        eoTeamAway={eoTeamAway}
         activeTrucoTitle={activeTrucoTitle}
         isTrucoActive={isTrucoActive}
         activeTrucoLabel={activeTrucoLabel}
