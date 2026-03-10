@@ -3282,6 +3282,30 @@ io.on("connection", (socket) => {
         winnerId: opposingReservadaOwnerId,
       };
     } else {
+      const florState = gameState.flor || {};
+      const myTeamIds = getTeamPlayerIds(gameState, socket.id);
+      const opposingTeamIds = (gameState.players || [])
+        .map((p) => p.id)
+        .filter((playerId) => !isSameTeam(gameState, socket.id, playerId));
+      const opposingHasAnyFlor = opposingTeamIds.some(
+        (playerId) => !!florState.hasFlorByPlayer?.[playerId] && !florState.burnedByPlayer?.[playerId]
+      );
+      const myTeamSungFlorIds = myTeamIds.filter(
+        (playerId) =>
+          !!florState.sungByPlayer?.[playerId] &&
+          !!florState.hasFlorByPlayer?.[playerId] &&
+          !florState.burnedByPlayer?.[playerId]
+      );
+      const myFlorPoints = !opposingHasAnyFlor ? myTeamSungFlorIds.length * 3 : 0;
+      if (myFlorPoints > 0) {
+        addPoints(gameState, socket.id, myFlorPoints);
+        const myLabel = getWinnerLabel(gameState, socket.id);
+        const totalAfterOwnFlor = getTotalPoints(gameState, socket.id);
+        messageQueue.push(
+          `${myLabel} suma ${myFlorPoints} punto${myFlorPoints > 1 ? "s" : ""} de Flor (total ${totalAfterOwnFlor})`
+        );
+      }
+
       const opposingFlorIds = (gameState.players || [])
         .map((p) => p.id)
         .filter(
@@ -3317,7 +3341,11 @@ io.on("connection", (socket) => {
       }
 
       gameState.envido = { ...(gameState.envido || {}), resolved: true };
-      gameState.flor = { ...(gameState.flor || {}), resolved: true };
+      gameState.flor = {
+        ...(gameState.flor || {}),
+        resolved: true,
+        winnerId: myFlorPoints > 0 ? socket.id : gameState.flor?.winnerId || null,
+      };
     }
 
     const matchWinnerId = getMatchWinnerId(gameState);
