@@ -2154,11 +2154,6 @@ io.on("connection", (socket) => {
           responderTurnId,
         };
         if (responderTurnId) gameState.turn = responderTurnId;
-        emitLockedMessage(
-          roomId,
-          gameState,
-          responderEligible ? "Rival: Privo y Truco o No Privo" : "Rival: No Privo"
-        );
         setBotCooldown(roomId, botId);
         emitGameUpdate(roomId, gameState);
       }
@@ -3570,13 +3565,6 @@ io.on("connection", (socket) => {
     if (responderTurnId) {
       gameState.turn = responderTurnId;
     }
-    emitLockedMessage(
-      roomId,
-      gameState,
-      responderEligible
-        ? "Rival: Privo y Truco o No Privo"
-        : "Rival: No Privo"
-    );
     emitGameUpdate(roomId, gameState);
   });
 
