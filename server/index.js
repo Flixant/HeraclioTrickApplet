@@ -60,6 +60,10 @@ const io = new Server(server, {
       return callback(new Error("Not allowed by CORS"));
     },
   },
+  // Keep mobile clients connected longer while app/browser is briefly backgrounded.
+  pingInterval: 25000,
+  pingTimeout: 120000,
+  connectTimeout: 45000,
 });
 
 function emitRooms() {
@@ -76,10 +80,15 @@ const MESSAGE_LOCK_MS = 1700;
 const GAME_TARGET = 12;
 const BOT_PREFIX = "bot:";
 const BOT_TICK_MS = 1100;
+const BOT_PENDING_RESPONSE_MIN_MS = 2800;
+const BOT_PENDING_RESPONSE_JITTER_MS = 2400;
 const RECONNECT_GRACE_MS = 45000;
 let botLoopStarted = false;
 let botsDebugEnabled = false;
 const botNextActionAt = new Map();
+const botPendingReadyAt = new Map();
+const botRematchVoteTimers = new Map();
+const roomMessageTimers = new Map();
 const disconnectedSeatTimeouts = new Map();
 
 function getSeatTimeoutKey(roomId, playerId) {
@@ -165,6 +174,68 @@ function canBotActNow(roomId, botId) {
 function setBotCooldown(roomId, botId, delayMs = randomBotDelayMs()) {
   const key = getBotActionKey(roomId, botId);
   botNextActionAt.set(key, Date.now() + delayMs);
+}
+
+function getBotRematchVoteKey(roomId, botId) {
+  return `${roomId}:${botId}`;
+}
+
+function clearBotRematchVoteTimer(roomId, botId) {
+  const key = getBotRematchVoteKey(roomId, botId);
+  const timer = botRematchVoteTimers.get(key);
+  if (timer) {
+    clearTimeout(timer);
+    botRematchVoteTimers.delete(key);
+  }
+}
+
+function clearRoomBotRematchVoteTimers(roomId) {
+  const prefix = `${roomId}:`;
+  for (const key of botRematchVoteTimers.keys()) {
+    if (key.startsWith(prefix)) {
+      clearTimeout(botRematchVoteTimers.get(key));
+      botRematchVoteTimers.delete(key);
+    }
+  }
+}
+
+function clearRoomMessageTimers(roomId) {
+  const timers = roomMessageTimers.get(roomId) || [];
+  for (const timer of timers) {
+    clearTimeout(timer);
+  }
+  roomMessageTimers.delete(roomId);
+}
+
+function ensurePendingSince(pendingState) {
+  if (!pendingState) return Date.now();
+  if (!pendingState.pendingSince) pendingState.pendingSince = Date.now();
+  return pendingState.pendingSince;
+}
+
+function getBotPendingKey(roomId, botId, pendingType, pendingSince) {
+  return `${roomId}:${pendingType}:${botId}:${pendingSince}`;
+}
+
+function canBotResolvePending(roomId, botId, pendingType, pendingSince) {
+  const key = getBotPendingKey(roomId, botId, pendingType, pendingSince);
+  const existingDueAt = botPendingReadyAt.get(key);
+  if (existingDueAt) return Date.now() >= existingDueAt;
+  const dueAt =
+    pendingSince +
+    BOT_PENDING_RESPONSE_MIN_MS +
+    Math.floor(Math.random() * BOT_PENDING_RESPONSE_JITTER_MS);
+  botPendingReadyAt.set(key, dueAt);
+  return Date.now() >= dueAt;
+}
+
+function clearBotPendingSchedule(roomId, botId, pendingType) {
+  const prefix = `${roomId}:${pendingType}:${botId}:`;
+  for (const key of botPendingReadyAt.keys()) {
+    if (key.startsWith(prefix)) {
+      botPendingReadyAt.delete(key);
+    }
+  }
 }
 
 function getNextPlayerId(gameState, currentPlayerId) {
@@ -306,6 +377,25 @@ function getTurnOrder(gameState, startId) {
     order.push(probe);
   }
   return order;
+}
+
+function isCurrentTurnLastToPlay(gameState, playerId) {
+  if (!gameState || !playerId || gameState.turn !== playerId) return false;
+  const players = gameState.players || [];
+  if (!players.length) return false;
+  const startId = gameState.currentHandStarter || gameState.roundStarter || players[0]?.id;
+  const order = getTurnOrder(gameState, startId);
+  if (!order.length) return false;
+  const isLastSeat = order[order.length - 1] === playerId;
+  const playedCount = (gameState.currentHandCards || []).length;
+  return isLastSeat && playedCount === order.length - 1;
+}
+
+function hasOpposingTeamCalledEnvido(gameState, playerId) {
+  const envido = gameState?.envido || {};
+  const callerId = envido.callerId || null;
+  if (!callerId) return false;
+  return !isSameTeam(gameState, playerId, callerId);
 }
 
 function getOrderIndexMap(gameState, startId) {
@@ -974,12 +1064,111 @@ io.on("connection", (socket) => {
   }
 
   function emitMessageSequence(roomId, messages, stepMs = 2400) {
+    clearRoomMessageTimers(roomId);
+    const timers = [];
     messages.forEach((message, index) => {
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         io.to(roomId).emit("server:message", message);
       }, index * stepMs);
+      timers.push(timer);
     });
+    roomMessageTimers.set(roomId, timers);
     return messages.length * stepMs;
+  }
+
+  function finalizeRematchIfReady(room, roomId) {
+    const gameState = room?.gameState;
+    if (!gameState?.matchEnded || !gameState?.rematch || gameState.rematch.resolved) return false;
+
+    const seatedIds = (gameState.players || []).map((p) => p.id);
+    const decisions = Object.values(gameState.rematch.decisionsByPlayer || {});
+    const everyoneAnswered = decisions.length > 0 && decisions.every((v) => v === "replay" || v === "exit");
+    if (!everyoneAnswered) return false;
+
+    const everyoneReplay = decisions.every((v) => v === "replay");
+    if (everyoneReplay) {
+      gameState.rematch = {
+        ...gameState.rematch,
+        status: "accepted",
+        resolved: true,
+        result: "replay",
+      };
+      clearRoomMessageTimers(roomId);
+      io.to(roomId).emit("server:clear-messages");
+      clearRoomBotRematchVoteTimers(roomId);
+      const starterId = getNextRoundStarterId(gameState) || gameState.roundStarter || seatedIds[0];
+      startGame.redealRound(room, starterId);
+      room.status = room.players.length === room.maxPlayers ? "full" : "waiting";
+      io.to(roomId).emit("server:message", "Todos confirmaron: comienza una nueva partida");
+      emitGameUpdate(roomId, room.gameState);
+      emitRooms();
+      return true;
+    }
+
+    gameState.rematch = {
+      ...gameState.rematch,
+      status: "declined",
+      resolved: true,
+      result: "exit",
+    };
+    clearRoomMessageTimers(roomId);
+    io.to(roomId).emit("server:clear-messages");
+    clearRoomBotRematchVoteTimers(roomId);
+    const idsToReturn = [...seatedIds];
+    for (const playerId of idsToReturn) {
+      const client = io.sockets.sockets.get(playerId);
+      if (client) {
+        client.leave(roomId);
+        client.data.roomId = null;
+        client.emit("match:return-roomlist");
+      }
+    }
+    room.players = [];
+    room.status = "waiting";
+    room.gameState = null;
+    io.to(roomId).emit("room:update", room);
+    emitRooms();
+    return true;
+  }
+
+  function scheduleBotRematchVotes(room, roomId) {
+    if (!room?.allowBots || !room?.gameState) return;
+    const gameState = room.gameState;
+    if (!gameState.matchEnded || !gameState.rematch || gameState.rematch.resolved) return;
+
+    const botIds = (gameState.players || [])
+      .map((p) => p.id)
+      .filter((id) => isBotPlayerId(id));
+
+    for (const botId of botIds) {
+      const alreadyDecided = gameState.rematch?.decisionsByPlayer?.[botId];
+      if (alreadyDecided === "replay" || alreadyDecided === "exit") continue;
+
+      const timerKey = getBotRematchVoteKey(roomId, botId);
+      if (botRematchVoteTimers.has(timerKey)) continue;
+
+      const delayMs = 1800 + Math.floor(Math.random() * 2600);
+      const timer = setTimeout(() => {
+        botRematchVoteTimers.delete(timerKey);
+        const liveRoom = getRoom(roomId);
+        if (!liveRoom?.gameState) return;
+        const liveState = liveRoom.gameState;
+        if (!liveState.matchEnded || !liveState.rematch || liveState.rematch.resolved) return;
+
+        const stillSeated = (liveState.players || []).some((p) => p.id === botId);
+        if (!stillSeated) return;
+
+        const currentDecision = liveState.rematch?.decisionsByPlayer?.[botId];
+        if (currentDecision === "replay" || currentDecision === "exit") return;
+
+        // Bot de testing vota replay por defecto para acelerar pruebas.
+        liveState.rematch.decisionsByPlayer[botId] = "replay";
+        emitGameUpdate(roomId, liveState);
+        finalizeRematchIfReady(liveRoom, roomId);
+      }, delayMs);
+
+      botRematchVoteTimers.set(timerKey, timer);
+    }
   }
 
   function resolveRound(room, winnerId, roomId) {
@@ -1031,22 +1220,108 @@ io.on("connection", (socket) => {
 
     const florWinnerBurned = !!flor.winnerId && !!gameState.flor?.burnedByPlayer?.[flor.winnerId];
     if (!flor.resolved) {
-      const florWinnerId = reservadaOwnerId || flor.winnerId || null;
-      const validFlorWinner =
-        !!florWinnerId && !(florWinnerBurned && florWinnerId === flor.winnerId);
+      const florPointsPerWinner = Math.max(3, flor.points || 3);
+      const validFlorPlayerIds = (gameState.players || [])
+        .map((p) => p.id)
+        .filter(
+          (playerId) =>
+            !!flor.hasFlorByPlayer?.[playerId] &&
+            !flor.burnedByPlayer?.[playerId] &&
+            (!!flor.sungByPlayer?.[playerId] || !!flor.reservadaByPlayer?.[playerId])
+        );
+
+      if (!reservadaOwnerId && gameState.mode === "2vs2" && validFlorPlayerIds.length > 0) {
+        const teamsWithFlor = new Map();
+        for (const playerId of validFlorPlayerIds) {
+          const teamKey = getPlayerTeamKey(gameState, playerId);
+          if (teamKey === null || typeof teamKey === "undefined") continue;
+          if (!teamsWithFlor.has(teamKey)) teamsWithFlor.set(teamKey, []);
+          teamsWithFlor.get(teamKey).push(playerId);
+        }
+
+        // Regla solicitada:
+        // - Si solo una pareja tiene flor y son ambos jugadores, cobran ambas flores.
+        // - Si la pareja contraria tiene una o mas flores, solo se cobra la flor mas alta.
+        if (teamsWithFlor.size === 1) {
+          const [, sameTeamFlorIds] = [...teamsWithFlor.entries()][0] || [];
+          if (Array.isArray(sameTeamFlorIds) && sameTeamFlorIds.length >= 2) {
+            const teamLabel = getWinnerLabel(gameState, sameTeamFlorIds[0]);
+            messageQueue.push(`${teamLabel} cobra ambas flores`);
+
+            let teamWinnerId = sameTeamFlorIds[0];
+            let bestScore = -1;
+            for (const playerId of sameTeamFlorIds) {
+              const score = computeFlorValue(gameState.roundHandsSnapshot?.[playerId] || [], gameState.vira);
+              if (score > bestScore) {
+                bestScore = score;
+                teamWinnerId = playerId;
+              }
+
+              addPoints(gameState, playerId, florPointsPerWinner);
+              const playerLabel = getWinnerLabel(gameState, playerId, "Jugador");
+              const florTotal = getTotalPoints(gameState, playerId);
+              messageQueue.push(
+                `${playerLabel} suma ${florPointsPerWinner} punto${florPointsPerWinner > 1 ? "s" : ""} de Flor (total ${florTotal})`
+              );
+            }
+
+            gameState.flor = {
+              ...flor,
+              resolved: true,
+              winnerId: teamWinnerId,
+              points: florPointsPerWinner * sameTeamFlorIds.length,
+            };
+          } else {
+            const florWinnerId = flor.winnerId || resolveFlorWinnerId(gameState) || sameTeamFlorIds?.[0] || null;
+            if (florWinnerId) {
+              addPoints(gameState, florWinnerId, florPointsPerWinner);
+              const florTotal = getTotalPoints(gameState, florWinnerId);
+              const florWinnerLabel = getWinnerLabel(gameState, florWinnerId);
+              messageQueue.push(`${florWinnerLabel} gana la flor`);
+              messageQueue.push(
+                `${florWinnerLabel} suma ${florPointsPerWinner} punto${florPointsPerWinner > 1 ? "s" : ""} de Flor (total ${florTotal})`
+              );
+              gameState.flor = { ...flor, resolved: true, winnerId: florWinnerId, points: florPointsPerWinner };
+            } else {
+              gameState.flor = { ...flor, resolved: true, winnerId: null, points: 0 };
+            }
+          }
+        } else {
+          const florWinnerId = flor.winnerId || resolveFlorWinnerId(gameState) || null;
+          const validFlorWinner =
+            !!florWinnerId &&
+            !flor.burnedByPlayer?.[florWinnerId] &&
+            validFlorPlayerIds.includes(florWinnerId);
+          if (validFlorWinner) {
+            addPoints(gameState, florWinnerId, florPointsPerWinner);
+            const florTotal = getTotalPoints(gameState, florWinnerId);
+            const florWinnerLabel = getWinnerLabel(gameState, florWinnerId);
+            messageQueue.push(`${florWinnerLabel} gana la flor`);
+            messageQueue.push(
+              `${florWinnerLabel} suma ${florPointsPerWinner} punto${florPointsPerWinner > 1 ? "s" : ""} de Flor (total ${florTotal})`
+            );
+            gameState.flor = { ...flor, resolved: true, winnerId: florWinnerId, points: florPointsPerWinner };
+          } else {
+            gameState.flor = { ...flor, resolved: true, winnerId: null, points: 0 };
+          }
+        }
+      } else {
+        const florWinnerId = reservadaOwnerId || flor.winnerId || null;
+        const validFlorWinner =
+          !!florWinnerId && !(florWinnerBurned && florWinnerId === flor.winnerId);
 
         if (validFlorWinner) {
-          const florPoints = Math.max(3, flor.points || 3);
-          addPoints(gameState, florWinnerId, florPoints);
+          addPoints(gameState, florWinnerId, florPointsPerWinner);
           const florTotal = getTotalPoints(gameState, florWinnerId);
           const florWinnerLabel = getWinnerLabel(gameState, florWinnerId);
           messageQueue.push(`${florWinnerLabel} gana la flor`);
           messageQueue.push(
-            `${florWinnerLabel} suma ${florPoints} punto${florPoints > 1 ? "s" : ""} de Flor (total ${florTotal})`
+            `${florWinnerLabel} suma ${florPointsPerWinner} punto${florPointsPerWinner > 1 ? "s" : ""} de Flor (total ${florTotal})`
           );
-          gameState.flor = { ...flor, resolved: true, winnerId: florWinnerId };
-      } else {
-        gameState.flor = { ...flor, resolved: true, winnerId: null, points: 0 };
+          gameState.flor = { ...flor, resolved: true, winnerId: florWinnerId, points: florPointsPerWinner };
+        } else {
+          gameState.flor = { ...flor, resolved: true, winnerId: null, points: 0 };
+        }
       }
     }
 
@@ -1122,6 +1397,8 @@ io.on("connection", (socket) => {
     const sequenceDuration = emitMessageSequence(roomId, messageQueue);
     if (!matchWinnerId) {
       scheduleRedeal(roomId, Math.max(1800, sequenceDuration + 400));
+    } else {
+      scheduleBotRematchVotes(room, roomId);
     }
   }
 
@@ -1306,28 +1583,151 @@ io.on("connection", (socket) => {
     return true;
   }
 
-  function chooseBotCardIndex(gameState, botId, hand) {
-    const ranked = hand
-      .map((card, index) => ({ index, rank: resolveHandRank(card, gameState.vira) }))
+  function getRankedHandInfo(hand, vira) {
+    return hand
+      .map((card, index) => ({
+        index,
+        rank: resolveHandRank(card, vira),
+        card,
+      }))
       .sort((a, b) => a.rank - b.rank);
-    const lowest = ranked[0]?.index ?? 0;
-    const highest = ranked[ranked.length - 1]?.index ?? 0;
+  }
 
-    const winning = getCurrentWinningInfo(gameState);
-    if ((gameState.currentHandCards || []).length) {
-      if (winning.winnerId && isSameTeam(gameState, botId, winning.winnerId)) {
-        return lowest;
-      }
-      const beatCard = ranked.find((item) => item.rank > winning.bestRank);
-      return beatCard ? beatCard.index : lowest;
-    }
+  function getCurrentHandOrder(gameState) {
+    const starter = gameState.currentHandStarter || gameState.roundStarter || gameState.players?.[0]?.id;
+    return getTurnOrder(gameState, starter);
+  }
 
+  function getRemainingOpponentsInThisHand(gameState, botId) {
+    const order = getCurrentHandOrder(gameState);
+    const myIdx = order.indexOf(botId);
+    if (myIdx < 0) return [];
+    return order.slice(myIdx + 1).filter((id) => !isSameTeam(gameState, id, botId));
+  }
+
+  function getBotRoundContext(gameState, botId) {
     const myTeamWins = getTeamHandWins(gameState, botId);
     const enemyTeamWins = (gameState.handResults || []).filter(
       (winnerId) => winnerId && !isSameTeam(gameState, botId, winnerId)
     ).length;
-    if (enemyTeamWins > myTeamWins) return highest;
-    if ((gameState.handNumber || 1) === 1 && ranked.length >= 3) return ranked[1].index;
+    const handNumber = gameState.handNumber || 1;
+    const roundPointValue = Number(gameState.roundPointValue || 1);
+    return {
+      myTeamWins,
+      enemyTeamWins,
+      handNumber,
+      roundPointValue,
+      mustWinNow: enemyTeamWins >= 1 && myTeamWins === 0,
+      ahead: myTeamWins > enemyTeamWins,
+      behind: enemyTeamWins > myTeamWins,
+    };
+  }
+
+  function estimateBotTrucoStrength(gameState, botId, hand = []) {
+    const ranked = getRankedHandInfo(hand, gameState.vira);
+    if (!ranked.length) return 0;
+    const highest = ranked[ranked.length - 1]?.rank || 0;
+    const secondHighest = ranked[ranked.length - 2]?.rank || 0;
+    const average = ranked.reduce((sum, item) => sum + item.rank, 0) / ranked.length;
+    const round = getBotRoundContext(gameState, botId);
+    let score = highest * 0.55 + secondHighest * 0.25 + average * 0.2;
+    if (round.mustWinNow) score += 2.5;
+    if (round.ahead) score -= 0.8;
+    return score;
+  }
+
+  function getBotEnvidoAcceptThreshold(pointsInDispute) {
+    if (pointsInDispute <= 2) return 23;
+    if (pointsInDispute <= 4) return 27;
+    if (pointsInDispute <= 6) return 30;
+    if (pointsInDispute <= 9) return 32;
+    return 34;
+  }
+
+  function shouldBotRaiseEnvido(gameState, botId, myEnvido, envido) {
+    if (!envido || envido.status !== "pending") return false;
+    if (envido.callType === "falta") return false;
+    if (isFlorAlreadySung(gameState) || isFlorEnvidoPending(gameState)) return false;
+    if (gameState.handNumber !== 1) return false;
+    if (myEnvido < 33) return false;
+
+    const points = Number(envido.points || 2);
+    const maxRaise = points < 10 ? 0.35 : 0.15;
+    const round = getBotRoundContext(gameState, botId);
+    const extraAggro = round.behind ? 0.15 : 0;
+    return Math.random() < maxRaise + extraAggro;
+  }
+
+  function shouldBotCallPrimeroEnvido(gameState, botId, truco) {
+    if (!gameState || !truco) return false;
+    if ((gameState.envido?.status || "idle") !== "idle") return false;
+    if (isFlorAlreadySung(gameState)) return false;
+    if (hasAvailableFlor(gameState, botId)) return false;
+
+    const playerIds = gameState.players.map((p) => p.id);
+    const isInFirstHand =
+      Object.values(gameState.handWinsByPlayer || {}).every((wins) => wins === 0) &&
+      (gameState.tableCards?.length || 0) < playerIds.length;
+    if (!isInFirstHand) return false;
+
+    const snapshot = gameState.roundHandsSnapshot || gameState.hands || {};
+    const myEnvido = computeEnvido(snapshot[botId] || [], gameState.vira);
+    if (myEnvido < 27) return false;
+
+    const proposed = Number(truco.proposedValue || 3);
+    const round = getBotRoundContext(gameState, botId);
+    let chance = myEnvido >= 33 ? 0.75 : myEnvido >= 30 ? 0.55 : 0.35;
+    if (proposed >= 6) chance += 0.12;
+    if (round.behind) chance += 0.08;
+    return Math.random() < Math.min(0.9, chance);
+  }
+
+  function getBotBluffChance(gameState, botId, kind = "generic") {
+    const round = getBotRoundContext(gameState, botId);
+    let base = 0.05;
+    if (round.behind) base += 0.03;
+    if ((round.handNumber || 1) === 1) base += 0.02;
+    if (kind === "call-truco" || kind === "accept-truco") base += 0.02;
+    if (kind === "call-envido" || kind === "accept-envido") base += 0.01;
+    return Math.min(0.16, Math.max(0, base));
+  }
+
+  function botWillBluff(gameState, botId, kind = "generic") {
+    return Math.random() < getBotBluffChance(gameState, botId, kind);
+  }
+
+  function chooseBotCardIndex(gameState, botId, hand) {
+    const ranked = getRankedHandInfo(hand, gameState.vira);
+    const lowest = ranked[0]?.index ?? 0;
+    const highest = ranked[ranked.length - 1]?.index ?? 0;
+    const medium = ranked[Math.floor(ranked.length / 2)]?.index ?? lowest;
+    const passedCard = ranked.find((item) => item.rank === 0)?.index;
+
+    const winning = getCurrentWinningInfo(gameState);
+    if ((gameState.currentHandCards || []).length) {
+      const remainingOpponents = getRemainingOpponentsInThisHand(gameState, botId);
+      const hasOpponentsAfterMe = remainingOpponents.length > 0;
+
+      if (winning.winnerId && isSameTeam(gameState, botId, winning.winnerId)) {
+        return typeof passedCard === "number" ? passedCard : lowest;
+      }
+
+      const beatCard = ranked.find((item) => item.rank > winning.bestRank);
+      if (!beatCard) return typeof passedCard === "number" ? passedCard : lowest;
+
+      // If an opponent still acts after the bot, avoid overcommitting unless needed.
+      if (hasOpponentsAfterMe) {
+        const saferBeat = ranked.find((item) => item.rank > winning.bestRank && item.rank <= beatCard.rank + 2);
+        return (saferBeat || beatCard).index;
+      }
+      return beatCard.index;
+    }
+
+    const round = getBotRoundContext(gameState, botId);
+    if (round.mustWinNow) return highest;
+    if (round.ahead) return typeof passedCard === "number" ? passedCard : lowest;
+    if (round.handNumber === 1 && ranked.length >= 3) return medium;
+    if (round.roundPointValue >= 6) return medium;
     return lowest;
   }
 
@@ -1340,12 +1740,15 @@ io.on("connection", (socket) => {
     const pendingFlorEnvido = isFlorEnvidoPending(gameState);
     if (pendingFlorEnvido && isBotPlayerId(gameState.flor?.florEnvidoResponderId)) {
       const botId = gameState.flor.florEnvidoResponderId;
+      const pendingSince = ensurePendingSince(gameState.flor);
+      if (!canBotResolvePending(roomId, botId, "flor-envido", pendingSince)) return;
       if (!canBotActNow(roomId, botId)) return;
       gameState.flor.florEnvidoStatus = "accepted";
       gameState.flor.florEnvidoCalled = true;
       gameState.flor.points = gameState.flor.florEnvidoPoints || 5;
       const responder = gameState.players.find((p) => p.id === botId);
       emitLockedMessage(roomId, gameState, `${responder?.name || "Bot"} respondio Quiero al Flor Envido`);
+      clearBotPendingSchedule(roomId, botId, "flor-envido");
       setBotCooldown(roomId, botId);
       botLog(roomId, responder?.name, "accept flor-envido");
       emitGameUpdate(roomId, gameState);
@@ -1355,14 +1758,45 @@ io.on("connection", (socket) => {
     const pendingEnvido = gameState.envido?.status === "pending";
     if (pendingEnvido && isBotPlayerId(gameState.envido?.responderId)) {
       const botId = gameState.envido.responderId;
+      const pendingSince = ensurePendingSince(gameState.envido);
+      if (!canBotResolvePending(roomId, botId, "envido", pendingSince)) return;
       if (!canBotActNow(roomId, botId)) return;
       const envido = gameState.envido || {};
       const snapshot = gameState.roundHandsSnapshot || gameState.hands || {};
       const myEnvido = computeEnvido(snapshot[botId] || [], gameState.vira);
-      const wantsAccept = myEnvido >= 25 || (envido.points || 2) <= 2;
+      const threshold = getBotEnvidoAcceptThreshold(envido.points || 2);
+      const round = getBotRoundContext(gameState, botId);
+      let wantsAccept = myEnvido >= (round.behind ? threshold - 1 : threshold);
+      if (!wantsAccept && myEnvido >= threshold - 3 && botWillBluff(gameState, botId, "accept-envido")) {
+        wantsAccept = true;
+      }
       const responder = gameState.players.find((p) => p.id === botId);
 
-      if (!wantsAccept) {
+      if (wantsAccept && shouldBotRaiseEnvido(gameState, botId, myEnvido, envido)) {
+        const current = Number(envido.points || 2);
+        const canFalta = current < computeFaltaEnvidoPoints(gameState);
+        const nextCallType = canFalta && current >= 8 ? "falta" : "envido";
+        const nextPoints =
+          nextCallType === "falta"
+            ? computeFaltaEnvidoPoints(gameState)
+            : Math.min(12, current + 2);
+        const nextResponderId = envido.callerId;
+        gameState.envido = {
+          ...envido,
+          status: "pending",
+          callerId: botId,
+          responderId: nextResponderId,
+          callType: nextCallType,
+          points: nextPoints,
+          winnerId: null,
+          resolved: false,
+        };
+        emitLockedMessage(
+          roomId,
+          gameState,
+          `${responder?.name || "Bot"} respondio ${nextCallType === "falta" ? "Falta Envido" : "Quiero y Envido"}. Ahora vale ${nextPoints}.`
+        );
+      } else if (!wantsAccept) {
         gameState.envido = {
           status: "rejected",
           callerId: envido.callerId,
@@ -1395,6 +1829,7 @@ io.on("connection", (socket) => {
         };
         emitLockedMessage(roomId, gameState, `${responder?.name || "Bot"} respondio Quiero al Envido.`);
       }
+      clearBotPendingSchedule(roomId, botId, "envido");
       setBotCooldown(roomId, botId);
       botLog(roomId, responder?.name, "envido response", wantsAccept ? "quiero" : "no quiero", myEnvido);
       emitGameUpdate(roomId, gameState);
@@ -1404,14 +1839,55 @@ io.on("connection", (socket) => {
     const pendingTruco = gameState.truco?.status === "pending";
     if (pendingTruco && isBotPlayerId(gameState.truco?.responderId)) {
       const botId = gameState.truco.responderId;
+      const pendingSince = ensurePendingSince(gameState.truco);
+      if (!canBotResolvePending(roomId, botId, "truco", pendingSince)) return;
       if (!canBotActNow(roomId, botId)) return;
       const truco = gameState.truco || {};
+
+      if (shouldBotCallPrimeroEnvido(gameState, botId, truco)) {
+        gameState.truco = {
+          status: "idle",
+          callerId: null,
+          responderId: null,
+          callType: null,
+          proposedValue: null,
+          acceptedById: null,
+        };
+
+        gameState.envido = {
+          status: "pending",
+          callerId: botId,
+          responderId: truco.callerId,
+          callType: "envido",
+          winnerId: null,
+          points: 2,
+          acceptedPoints: 1,
+          envidoByPlayer: {},
+          resolved: false,
+          pendingSince: Date.now(),
+        };
+
+        const caller = gameState.players.find((p) => p.id === botId);
+        emitLockedMessage(
+          roomId,
+          gameState,
+          `${caller?.name || "Bot"} respondio Primero Envido. Se pausa el Truco y se responde el Envido.`
+        );
+        clearBotPendingSchedule(roomId, botId, "truco");
+        setBotCooldown(roomId, botId);
+        botLog(roomId, botId, "call primero envido");
+        emitGameUpdate(roomId, gameState);
+        return;
+      }
+
       const hand = gameState.hands?.[botId] || [];
-      const maxRank = hand.length
-        ? Math.max(...hand.map((card) => resolveHandRank(card, gameState.vira)))
-        : 0;
+      const strength = estimateBotTrucoStrength(gameState, botId, hand);
       const proposed = truco.proposedValue || 3;
-      const wantsAccept = maxRank >= 10 || proposed <= 3;
+      const minStrengthByValue = proposed <= 3 ? 8.5 : proposed <= 6 ? 10.8 : proposed <= 9 ? 12.5 : 13.6;
+      let wantsAccept = strength >= minStrengthByValue;
+      if (!wantsAccept && strength >= minStrengthByValue - 1.5 && botWillBluff(gameState, botId, "accept-truco")) {
+        wantsAccept = true;
+      }
 
       if (!wantsAccept) {
         const callerId = truco.callerId;
@@ -1441,8 +1917,9 @@ io.on("connection", (socket) => {
           `${responder?.name || "Bot"} respondio Quiero al ${CALL_LABELS[truco.callType || "truco"]}`
         );
       }
+      clearBotPendingSchedule(roomId, botId, "truco");
       setBotCooldown(roomId, botId);
-      botLog(roomId, botId, "truco response", wantsAccept ? "quiero" : "no quiero", maxRank, proposed);
+      botLog(roomId, botId, "truco response", wantsAccept ? "quiero" : "no quiero", strength, proposed);
       emitGameUpdate(roomId, gameState);
       return;
     }
@@ -1530,7 +2007,12 @@ io.on("connection", (socket) => {
       !hasAvailableFlor(gameState, botId)
     ) {
       const myEnvido = computeEnvido(gameState.roundHandsSnapshot?.[botId] || hand, gameState.vira);
-      if (myEnvido >= 28 && Math.random() < 0.45) {
+      const round = getBotRoundContext(gameState, botId);
+      const callChance = myEnvido >= 33 ? 0.8 : myEnvido >= 30 ? 0.55 : myEnvido >= 28 ? 0.3 : 0;
+      const bluffChance = myEnvido >= 24 && myEnvido <= 27 ? getBotBluffChance(gameState, botId, "call-envido") : 0;
+      const shouldCallStrong = callChance > 0 && Math.random() < callChance + (round.behind ? 0.1 : 0);
+      const shouldCallBluff = bluffChance > 0 && Math.random() < bluffChance;
+      if (shouldCallStrong || shouldCallBluff) {
         const responderId = getOpposingResponderId(gameState, botId);
         gameState.envido = {
           status: "pending",
@@ -1546,7 +2028,7 @@ io.on("connection", (socket) => {
         const me = gameState.players.find((p) => p.id === botId);
         emitLockedMessage(roomId, gameState, `${me?.name || "Bot"} canto Envido`);
         setBotCooldown(roomId, botId);
-        botLog(roomId, botId, "call envido", myEnvido);
+        botLog(roomId, botId, shouldCallBluff ? "bluff envido" : "call envido", myEnvido);
         emitGameUpdate(roomId, gameState);
         return;
       }
@@ -1558,8 +2040,14 @@ io.on("connection", (socket) => {
       gameState.envido?.status !== "pending" &&
       !isFlorEnvidoPending(gameState)
     ) {
-      const maxRank = Math.max(...hand.map((card) => resolveHandRank(card, gameState.vira)));
-      if (maxRank >= 13 && Math.random() < 0.35) {
+      const strength = estimateBotTrucoStrength(gameState, botId, hand);
+      const round = getBotRoundContext(gameState, botId);
+      const baseChance = strength >= 13 ? 0.55 : strength >= 11.5 ? 0.35 : 0;
+      const chance = baseChance + (round.behind ? 0.15 : 0);
+      const bluffChance = strength >= 9.8 && strength < 11.5 ? getBotBluffChance(gameState, botId, "call-truco") : 0;
+      const shouldCallStrong = chance > 0 && Math.random() < chance;
+      const shouldCallBluff = bluffChance > 0 && Math.random() < bluffChance;
+      if (shouldCallStrong || shouldCallBluff) {
         const responderId = getOpposingResponderId(gameState, botId);
         gameState.truco = {
           status: "pending",
@@ -1572,7 +2060,7 @@ io.on("connection", (socket) => {
         const me = gameState.players.find((p) => p.id === botId);
         emitLockedMessage(roomId, gameState, `${me?.name || "Bot"} canto Truco`);
         setBotCooldown(roomId, botId);
-        botLog(roomId, botId, "call truco", maxRank);
+        botLog(roomId, botId, shouldCallBluff ? "bluff truco" : "call truco", strength);
         emitGameUpdate(roomId, gameState);
         return;
       }
@@ -1656,7 +2144,7 @@ io.on("connection", (socket) => {
     io.to(roomId).emit("room:update", result.room);
     emitRooms();
 
-    if (result.room.players.length === result.room.maxPlayers) {
+    if (result.room.players.length === result.room.maxPlayers && !result.room.gameState) {
       console.log("Mesa llena, iniciando partida:", roomId);
       startGame(result.room);
 
@@ -2085,7 +2573,7 @@ io.on("connection", (socket) => {
     emitGameUpdate(roomId, gameState);
   });
 
-  socket.on("call:envido", ({ roomId }) => {
+  socket.on("call:envido", ({ roomId, stones }) => {
     if (!roomId) return;
 
     const room = getRoom(roomId);
@@ -2104,6 +2592,10 @@ io.on("connection", (socket) => {
     }
     if (gameState.turn !== socket.id) {
       socket.emit("server:message", "Solo puede cantar Envido el jugador en turno");
+      return;
+    }
+    if (gameState.truco?.callerId === socket.id) {
+      socket.emit("server:message", "Si ya cantaste Truco no puedes cantar Envido");
       return;
     }
     const envidoState = gameState.envido || { status: "idle" };
@@ -2131,8 +2623,16 @@ io.on("connection", (socket) => {
       socket.emit("server:message", "No se puede cantar envido con un canto pendiente");
       return;
     }
+    if (gameState.truco?.status === "accepted") {
+      socket.emit("server:message", "No se puede cantar envido despues de aceptar Truco");
+      return;
+    }
 
     const responderId = getOpposingResponderId(gameState, socket.id);
+
+    const safeStones = Number.isFinite(Number(stones))
+      ? Math.max(1, Math.min(12, Math.floor(Number(stones))))
+      : 2;
 
     gameState.envido = {
       status: "pending",
@@ -2140,14 +2640,20 @@ io.on("connection", (socket) => {
       responderId,
       callType: "envido",
       winnerId: null,
-      points: 2,
+      points: safeStones,
       acceptedPoints: 1,
       envidoByPlayer: {},
       resolved: false,
     };
 
     const caller = gameState.players.find((p) => p.id === socket.id);
-    emitLockedMessage(roomId, gameState, `${caller?.name || "Jugador"} canto Envido`);
+    emitLockedMessage(
+      roomId,
+      gameState,
+      safeStones > 2
+        ? `${caller?.name || "Jugador"} canto Envido ${safeStones} piedras`
+        : `${caller?.name || "Jugador"} canto Envido`
+    );
 
     emitGameUpdate(roomId, gameState);
   });
@@ -2174,6 +2680,10 @@ io.on("connection", (socket) => {
       socket.emit("server:message", "Solo puede cantar Falta Envido el jugador en turno");
       return;
     }
+    if (gameState.truco?.callerId === socket.id) {
+      socket.emit("server:message", "Si ya cantaste Truco no puedes cantar Falta Envido");
+      return;
+    }
     const envidoState = gameState.envido || { status: "idle" };
 
     if (envidoState.status !== "idle") {
@@ -2193,6 +2703,10 @@ io.on("connection", (socket) => {
 
     if (gameState.truco?.status === "pending") {
       socket.emit("server:message", "No se puede cantar falta envido con un canto pendiente");
+      return;
+    }
+    if (gameState.truco?.status === "accepted") {
+      socket.emit("server:message", "No se puede cantar falta envido despues de aceptar Truco");
       return;
     }
 
@@ -2383,7 +2897,7 @@ io.on("connection", (socket) => {
     emitGameUpdate(roomId, gameState);
   });
 
-  socket.on("envido:raise", ({ roomId, kind }) => {
+  socket.on("envido:raise", ({ roomId, kind, stones }) => {
     if (!roomId) return;
 
     const room = getRoom(roomId);
@@ -2418,6 +2932,13 @@ io.on("connection", (socket) => {
     let nextPoints = currentPoints + 2;
     if (safeKind === "falta") {
       nextPoints = computeFaltaEnvidoPoints(gameState);
+    } else {
+      const safeStones = Number.isFinite(Number(stones))
+        ? Math.max(1, Math.min(12, Math.floor(Number(stones))))
+        : null;
+      if (safeStones !== null) {
+        nextPoints = currentPoints + safeStones;
+      }
     }
 
     gameState.envido = {
@@ -2435,7 +2956,7 @@ io.on("connection", (socket) => {
       gameState,
       safeKind === "falta"
         ? `${nextCaller?.name || "Jugador"} respondio Falta Envido. Ahora vale ${nextPoints}.`
-        : `${nextCaller?.name || "Jugador"} respondio Quiero y Envido. Ahora vale ${nextPoints}.`
+        : `${nextCaller?.name || "Jugador"} envido ${nextPoints - currentPoints} piedra${nextPoints - currentPoints === 1 ? "" : "s"}. Ahora vale ${nextPoints}.`
     );
     emitGameUpdate(roomId, gameState);
   });
@@ -2595,6 +3116,191 @@ io.on("connection", (socket) => {
     }
 
     emitGameUpdate(roomId, room.gameState);
+  });
+
+  socket.on("play:mazo", ({ roomId }) => {
+    if (!roomId) return;
+    const room = getRoom(roomId);
+    if (!room || !room.gameState) return;
+
+    const gameState = room.gameState;
+    if (gameState.roundEnding) return;
+    if (isInputLocked(gameState)) return;
+    if (gameState.turn !== socket.id) {
+      socket.emit("server:message", "No es tu turno");
+      return;
+    }
+    if (gameState.firstHandTie && gameState.pardaPhase === "selecting") {
+      socket.emit("server:message", "No puedes irte al mazo durante la seleccion de parda");
+      return;
+    }
+    if (isFlorEnvidoPending(gameState) || gameState.envido?.status === "pending" || gameState.truco?.status === "pending") {
+      socket.emit("server:message", "No puedes irte al mazo con un canto pendiente");
+      return;
+    }
+
+    const opponentId = getOpposingResponderId(gameState, socket.id);
+    if (!opponentId) return;
+
+    const me = gameState.players.find((p) => p.id === socket.id);
+    const opponentLabel = getWinnerLabel(gameState, opponentId);
+
+    const trucoPointsInPlay = Math.max(
+      1,
+      Number(
+        gameState.truco?.status === "pending"
+          ? gameState.truco?.proposedValue || gameState.roundPointValue || 1
+          : gameState.roundPointValue || 1
+      ) || 1
+    );
+
+    const isLastToPlay = isCurrentTurnLastToPlay(gameState, socket.id);
+    const envidoWasNeverCalled = (gameState.envido?.status || "idle") === "idle";
+    const concedeExtraEnvido =
+      !isLastToPlay &&
+      envidoWasNeverCalled &&
+      !hasOpposingTeamCalledEnvido(gameState, socket.id);
+    const envidoBonus = concedeExtraEnvido ? 1 : 0;
+
+    const messageQueue = [];
+    messageQueue.push(`${me?.name || "Jugador"} se fue al mazo`);
+
+    const reservadaOwnerId = getFlorReservadaOwnerId(gameState);
+    const opposingReservadaOwnerId =
+      reservadaOwnerId && !isSameTeam(gameState, socket.id, reservadaOwnerId)
+        ? reservadaOwnerId
+        : null;
+
+    if (opposingReservadaOwnerId) {
+      const reservadaWinnerLabel = getWinnerLabel(gameState, opposingReservadaOwnerId);
+      const reservadaPoints = 5;
+      addPoints(gameState, opposingReservadaOwnerId, reservadaPoints);
+      const totalAfterReservada = getTotalPoints(gameState, opposingReservadaOwnerId);
+      messageQueue.push(
+        `${reservadaWinnerLabel} suma ${reservadaPoints} puntos de Flor Reservada (total ${totalAfterReservada})`
+      );
+
+      const teammateHasFlor = getTeamPlayerIds(gameState, opposingReservadaOwnerId).some(
+        (playerId) =>
+          playerId !== opposingReservadaOwnerId &&
+          !!gameState.flor?.hasFlorByPlayer?.[playerId] &&
+          !gameState.flor?.burnedByPlayer?.[playerId]
+      );
+      if (teammateHasFlor) {
+        const teammateFlorPoints = 3;
+        addPoints(gameState, opposingReservadaOwnerId, teammateFlorPoints);
+        const totalAfterTeammateFlor = getTotalPoints(gameState, opposingReservadaOwnerId);
+        messageQueue.push(
+          `${reservadaWinnerLabel} suma ${teammateFlorPoints} puntos por la Flor del companero (total ${totalAfterTeammateFlor})`
+        );
+      }
+
+      gameState.envido = { ...(gameState.envido || {}), resolved: true };
+      gameState.flor = {
+        ...(gameState.flor || {}),
+        resolved: true,
+        winnerId: opposingReservadaOwnerId,
+      };
+    } else {
+      const opposingFlorIds = (gameState.players || [])
+        .map((p) => p.id)
+        .filter(
+          (playerId) =>
+            !isSameTeam(gameState, socket.id, playerId) &&
+            !!gameState.flor?.hasFlorByPlayer?.[playerId] &&
+            !gameState.flor?.burnedByPlayer?.[playerId]
+        );
+      const florPointsByMazo =
+        opposingFlorIds.length >= 2 ? 6 : opposingFlorIds.length === 1 ? 3 : 0;
+      if (florPointsByMazo > 0) {
+        addPoints(gameState, opponentId, florPointsByMazo);
+        const totalAfterFlor = getTotalPoints(gameState, opponentId);
+        messageQueue.push(
+          `${opponentLabel} suma ${florPointsByMazo} punto${florPointsByMazo > 1 ? "s" : ""} de Flor por irse al mazo (total ${totalAfterFlor})`
+        );
+      }
+
+      const envido = gameState.envido || {};
+      const skipEnvidoPointsByFlor = florPointsByMazo > 0 && !reservadaOwnerId;
+      if (
+        !skipEnvidoPointsByFlor &&
+        !envido.resolved &&
+        (envido.status === "accepted" || envido.status === "rejected")
+      ) {
+        let envidoWinnerId = envido.winnerId || null;
+        let envidoPoints = Number(envido.points || 0);
+
+        if (envido.status === "accepted") {
+          const snapshot = gameState.roundHandsSnapshot || gameState.hands || {};
+          const envidoByPlayer = {};
+          const playerIds = (gameState.players || []).map((p) => p.id);
+          for (const playerId of playerIds) {
+            envidoByPlayer[playerId] = computeEnvido(snapshot[playerId] || [], gameState.vira);
+          }
+          envidoWinnerId =
+            envidoWinnerId || resolveScoreWinnerByTeam(gameState, envidoByPlayer, playerIds);
+          envidoPoints = Math.max(1, envidoPoints || Number(envido.acceptedPoints || 0));
+          gameState.envido = {
+            ...envido,
+            winnerId: envidoWinnerId,
+            points: envidoPoints,
+            acceptedPoints: Math.max(1, Number(envido.acceptedPoints || envidoPoints || 1)),
+            envidoByPlayer,
+            resolved: false,
+          };
+        }
+
+        if (envidoWinnerId && envidoPoints > 0) {
+          addPoints(gameState, envidoWinnerId, envidoPoints);
+          const envidoWinnerLabel = getWinnerLabel(gameState, envidoWinnerId);
+          const envidoTotal = getTotalPoints(gameState, envidoWinnerId);
+          messageQueue.push(`${envidoWinnerLabel} gana el envido`);
+          messageQueue.push(
+            `${envidoWinnerLabel} suma ${envidoPoints} punto${envidoPoints > 1 ? "s" : ""} de Envido (total ${envidoTotal})`
+          );
+        }
+        gameState.envido = { ...(gameState.envido || envido), resolved: true };
+      } else if (skipEnvidoPointsByFlor && !envido.resolved) {
+        gameState.envido = { ...envido, resolved: true };
+      }
+
+      addPoints(gameState, opponentId, trucoPointsInPlay);
+      const totalAfterTruco = getTotalPoints(gameState, opponentId);
+      messageQueue.push(
+        `${opponentLabel} suma ${trucoPointsInPlay} punto${trucoPointsInPlay > 1 ? "s" : ""} de Truco (total ${totalAfterTruco})`
+      );
+
+      if (envidoBonus > 0) {
+        addPoints(gameState, opponentId, envidoBonus);
+        const totalAfterEnvido = getTotalPoints(gameState, opponentId);
+        messageQueue.push(
+          `${opponentLabel} suma ${envidoBonus} punto de Envido por irse al mazo (total ${totalAfterEnvido})`
+        );
+      }
+
+      gameState.envido = { ...(gameState.envido || {}), resolved: true };
+      gameState.flor = { ...(gameState.flor || {}), resolved: true };
+    }
+
+    const matchWinnerId = getMatchWinnerId(gameState);
+    if (matchWinnerId) {
+      const championLabel = getWinnerLabel(gameState, matchWinnerId);
+      messageQueue.push(`${championLabel} gana la partida`);
+      gameState.matchEnded = true;
+      gameState.matchWinnerId = matchWinnerId;
+      gameState.rematch = buildRematchState(gameState);
+      room.status = "finished";
+      emitRooms();
+    }
+
+    gameState.roundEnding = true;
+    emitGameUpdate(roomId, gameState);
+    const sequenceDuration = emitMessageSequence(roomId, messageQueue);
+    if (!matchWinnerId) {
+      scheduleRedeal(roomId, Math.max(1800, sequenceDuration + 400));
+    } else {
+      scheduleBotRematchVotes(room, roomId);
+    }
   });
 
   socket.on("play:card", ({ roomId, cardIndex, faceDown }) => {
@@ -2821,49 +3527,8 @@ io.on("connection", (socket) => {
 
     gameState.rematch.decisionsByPlayer[socket.id] = safeDecision;
     emitGameUpdate(roomId, gameState);
-
-    const decisions = Object.values(gameState.rematch.decisionsByPlayer || {});
-    const everyoneAnswered = decisions.length > 0 && decisions.every((v) => v === "replay" || v === "exit");
-    if (!everyoneAnswered) return;
-
-    const everyoneReplay = decisions.every((v) => v === "replay");
-    if (everyoneReplay) {
-      gameState.rematch = {
-        ...gameState.rematch,
-        status: "accepted",
-        resolved: true,
-        result: "replay",
-      };
-      const starterId = getNextRoundStarterId(gameState) || gameState.roundStarter || seatedIds[0];
-      startGame.redealRound(room, starterId);
-      room.status = room.players.length === room.maxPlayers ? "full" : "waiting";
-      io.to(roomId).emit("server:message", "Todos confirmaron: comienza una nueva partida");
-      emitGameUpdate(roomId, room.gameState);
-      emitRooms();
-      return;
-    }
-
-    gameState.rematch = {
-      ...gameState.rematch,
-      status: "declined",
-      resolved: true,
-      result: "exit",
-    };
-
-    const idsToReturn = [...seatedIds];
-    for (const playerId of idsToReturn) {
-      const client = io.sockets.sockets.get(playerId);
-      if (client) {
-        client.leave(roomId);
-        client.data.roomId = null;
-        client.emit("match:return-roomlist");
-      }
-    }
-    room.players = [];
-    room.status = "waiting";
-    room.gameState = null;
-    io.to(roomId).emit("room:update", room);
-    emitRooms();
+    scheduleBotRematchVotes(room, roomId);
+    finalizeRematchIfReady(room, roomId);
   });
 
   socket.on("disconnect", () => {
