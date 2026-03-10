@@ -587,6 +587,19 @@ const CALL_LABELS = {
   valejuego: "Vale Juego",
 };
 
+const TEAM_SIGNAL_LABELS = {
+  ven_a_mi: "Ven a mi",
+  voy_para_alla: "Voy para alla",
+  mata: "Mata",
+  puyalo: "Puyalo",
+  pegaselo: "Pegaselo",
+  no_venga: "No venga",
+  llevo: "Llevo",
+  tiene_algo: "Tiene algo",
+};
+const TEAM_SIGNAL_COOLDOWN_MS = 1200;
+const teamSignalCooldownByPlayer = new Map();
+
 
 function computeFaltaEnvidoPoints(gameState = {}) {
   const isTeams = gameState?.mode === "2vs2";
@@ -2207,6 +2220,29 @@ io.on("connection", (socket) => {
     emitGameUpdate(roomId, gameState);
   });
 
+  socket.on("call:team-signal", ({ roomId, signal }) => {
+    if (!roomId || !signal) return;
+    const room = getRoom(roomId);
+    if (!room || !room.gameState) return;
+    const gameState = room.gameState;
+    if (gameState.roundEnding) return;
+    if (gameState.mode !== "2vs2" || (gameState.players || []).length !== 4) return;
+
+    const me = (gameState.players || []).find((p) => p.id === socket.id);
+    if (!me) return;
+
+    const safeSignal = String(signal);
+    const label = TEAM_SIGNAL_LABELS[safeSignal];
+    if (!label) return;
+
+    const cooldownKey = `${roomId}:${socket.id}`;
+    const lastAt = teamSignalCooldownByPlayer.get(cooldownKey) || 0;
+    if (Date.now() - lastAt < TEAM_SIGNAL_COOLDOWN_MS) return;
+    teamSignalCooldownByPlayer.set(cooldownKey, Date.now());
+
+    io.to(roomId).emit("server:message", `${me.name || "Jugador"} canta: ${label}`);
+  });
+
   socket.on("call:flor", ({ roomId }) => {
     if (!roomId) return;
 
@@ -3498,6 +3534,11 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     console.log("Jugador desconectado:", socket.id);
+    for (const key of teamSignalCooldownByPlayer.keys()) {
+      if (key.endsWith(`:${socket.id}`)) {
+        teamSignalCooldownByPlayer.delete(key);
+      }
+    }
 
     const roomId = socket.data.roomId;
     if (!roomId) return;

@@ -10,6 +10,7 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
   const messageTimeoutRef = useRef(null);
   const [showAdvancedCantos, setShowAdvancedCantos] = useState(false);
   const [showAdvancedJugadas, setShowAdvancedJugadas] = useState(false);
+  const [showCommunicationCantos, setShowCommunicationCantos] = useState(false);
   const [showTestPanel, setShowTestPanel] = useState(false);
   const [passCardArmed, setPassCardArmed] = useState(false);
   const [pardaDraft, setPardaDraft] = useState([]);
@@ -311,6 +312,16 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
     6: { label: "Vale 9", event: "call:vale9", requiresAcceptedBy: true },
     9: { label: "Vale Juego", event: "call:valejuego", requiresAcceptedBy: true },
   };
+  const teamSignals = [
+    { key: "ven_a_mi", label: "Ven a mi" },
+    { key: "voy_para_alla", label: "Voy para alla" },
+    { key: "mata", label: "Mata" },
+    { key: "puyalo", label: "Puyalo" },
+    { key: "pegaselo", label: "Pegaselo" },
+    { key: "no_venga", label: "No venga" },
+    { key: "llevo", label: "Llevo" },
+    { key: "tiene_algo", label: "Tiene algo" },
+  ];
 
   const nextCall = nextCallByValue[roundPointValue] || null;
   const acceptedByMyTeam =
@@ -580,6 +591,11 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
     socket.emit("call:flor-envido", { roomId });
   };
 
+  const callTeamSignal = (signal) => {
+    if (!isTwoVsTwo || !signal) return;
+    socket.emit("call:team-signal", { roomId, signal });
+  };
+
   const runAdvancedCanto = (action) => {
     action?.();
     setShowAdvancedCantos(false);
@@ -601,6 +617,8 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
     socket.emit("match:decision", { roomId, decision: "exit" });
     onLeaveToRoomList?.();
   };
+
+  const canCallTeamSignals = isTwoVsTwo && !isMatchEnded && !!myPlayerId;
 
   useEffect(() => {
     if (!isPardaSelecting || hasSubmittedParda) {
@@ -1055,7 +1073,16 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
           </div>
           <button
             type="button"
-            onClick={() => setShowAdvancedCantos((prev) => !prev)}
+            onClick={() =>
+              setShowAdvancedCantos((prev) => {
+                const next = !prev;
+                if (next) {
+                  setShowAdvancedJugadas(false);
+                  setShowCommunicationCantos(false);
+                }
+                return next;
+              })
+            }
             className="flex w-full items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-left text-sm font-medium text-slate-600 shadow-[0_6px_14px_rgba(0,0,0,0.25)] transition  sm:py-1.5 sm:text-xs"
           >
             <span>Cantos Avanzados</span>
@@ -1146,8 +1173,17 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
 
           <button
             type="button"
-            onClick={() => setShowAdvancedJugadas((prev) => !prev)}
-            className="flex w-full items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-left text-sm font-medium text-slate-600 shadow-[0_6px_14px_rgba(0,0,0,0.25)] transition"
+            onClick={() =>
+              setShowAdvancedJugadas((prev) => {
+                const next = !prev;
+                if (next) {
+                  setShowAdvancedCantos(false);
+                  setShowCommunicationCantos(false);
+                }
+                return next;
+              })
+            }
+            className="flex w-full items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-left text-sm font-medium text-slate-600 shadow-[0_6px_14px_rgba(0,0,0,0.25)] transition sm:py-1.5 sm:text-xs"
           >
             <span>Jugadas Avanzadas</span>
             <span className="text-lg leading-none">{showAdvancedJugadas ? "-" : "+"}</span>
@@ -1198,6 +1234,53 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
               </button>
             </div>
           </div>
+
+          {isTwoVsTwo && (
+            <>
+              <button
+                type="button"
+                onClick={() =>
+                  setShowCommunicationCantos((prev) => {
+                    const next = !prev;
+                    if (next) {
+                      setShowAdvancedCantos(false);
+                      setShowAdvancedJugadas(false);
+                    }
+                    return next;
+                  })
+                }
+                className="flex w-full items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-left text-sm font-medium text-slate-600 shadow-[0_6px_14px_rgba(0,0,0,0.25)] transition sm:py-1.5 sm:text-xs"
+              >
+                <span>Cantos de Comunicacion</span>
+                <span className="text-lg leading-none">{showCommunicationCantos ? "-" : "+"}</span>
+              </button>
+              <div
+                className={`overflow-hidden transition-[max-height] duration-300 ease-out ${
+                  showCommunicationCantos ? "max-h-[260px] pointer-events-auto my-0.5" : "max-h-0 pointer-events-none"
+                }`}
+              >
+                <div className="overflow-hidden rounded-lg bg-slate-50 p-1.5 shadow-[0_6px_14px_rgba(0,0,0,0.25)]">
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {teamSignals.map((signal) => (
+                      <button
+                        key={signal.key}
+                        type="button"
+                        onClick={() => callTeamSignal(signal.key)}
+                        disabled={!canCallTeamSignals}
+                        className={`rounded-md px-2 py-1.5 text-[11px] font-semibold text-white transition sm:text-[10px] ${
+                          canCallTeamSignals
+                            ? "bg-emerald-700 hover:bg-emerald-800"
+                            : "cursor-not-allowed bg-slate-400 opacity-80"
+                        }`}
+                      >
+                        {signal.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         <div className="mt-0.5 rounded-lg bg-slate-50 p-2.5 text-slate-700 shadow-[0_8px_18px_rgba(0,0,0,0.35)] sm:p-2">
