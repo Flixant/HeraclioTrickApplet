@@ -671,6 +671,57 @@ function getTeamScoreByKey(gameState, teamKey) {
   return getTotalPoints(gameState, sampleId);
 }
 
+function resolveCanto11ByFlorIfNeeded(roomId, room, gameState) {
+  const canto11 = gameState?.canto11 || {};
+  const flor = gameState?.flor || {};
+  const snapshot = gameState?.roundHandsSnapshot || gameState?.hands || {};
+  const singingIds = getTeamIdsByKey(gameState, canto11.singingTeamKey);
+  const responderIds = getTeamIdsByKey(gameState, canto11.responderTeamKey);
+  if (!singingIds.length || !responderIds.length) return false;
+
+  const hasSingingFlor = singingIds.some(
+    (id) => !!flor.hasFlorByPlayer?.[id] && !flor.burnedByPlayer?.[id]
+  );
+  if (!hasSingingFlor) return false;
+
+  const hasResponderFlor = responderIds.some(
+    (id) => !!flor.hasFlorByPlayer?.[id] && !flor.burnedByPlayer?.[id]
+  );
+
+  let winnerId = null;
+  let reasonMessage = "";
+  if (!hasResponderFlor) {
+    winnerId = singingIds[0];
+    reasonMessage = "gana la partida (flor, rival sin flor)";
+  } else {
+    const candidateIds = [...singingIds, ...responderIds].filter(
+      (id) => !!flor.hasFlorByPlayer?.[id] && !flor.burnedByPlayer?.[id]
+    );
+    const scoreByPlayer = {};
+    for (const id of candidateIds) {
+      scoreByPlayer[id] = computeFlorValue(snapshot[id] || [], gameState.vira);
+    }
+    winnerId = resolveScoreWinnerByTeam(gameState, scoreByPlayer, candidateIds);
+    reasonMessage = "gana la partida por flor mas alta";
+  }
+
+  if (!winnerId) return false;
+
+  gameState.canto11 = { ...canto11, status: "resolved" };
+  const winnerLabel = getWinnerLabel(gameState, winnerId);
+  emitLockedMessage(roomId, gameState, `${winnerLabel} ${reasonMessage}`);
+  gameState.matchEnded = true;
+  gameState.matchWinnerId = winnerId;
+  gameState.matchEndedAt = Date.now();
+  gameState.rematch = buildRematchState(gameState);
+  if (room) {
+    room.status = "finished";
+    emitRooms();
+  }
+  emitGameUpdate(roomId, gameState);
+  return true;
+}
+
 function activateCanto11IfNeeded(gameState) {
   if (!gameState || gameState.matchEnded) return false;
   if ((gameState.tableCards || []).length > 0) return false;
@@ -2130,11 +2181,24 @@ io.on("connection", (socket) => {
           declareIndex: nextDeclareIndex >= 0 ? nextDeclareIndex : declareOrder.length,
         };
         const me = gameState.players.find((p) => p.id === botId);
-        emitLockedMessage(roomId, gameState, `${me?.name || "Bot"}: Tengo ${envite} puntos de envite`);
+        const singerHasFlor =
+          !!gameState.flor?.hasFlorByPlayer?.[botId] && !gameState.flor?.burnedByPlayer?.[botId];
+        emitLockedMessage(
+          roomId,
+          gameState,
+          singerHasFlor
+            ? `${me?.name || "Bot"}: Tengo Flor`
+            : `${me?.name || "Bot"}: Tengo ${envite} puntos de envite`
+        );
         if (nextDeclareIndex >= 0) {
           gameState.turn = declareOrder[nextDeclareIndex];
           setBotCooldown(roomId, botId);
           emitGameUpdate(roomId, gameState);
+          return;
+        }
+
+        if (resolveCanto11ByFlorIfNeeded(roomId, room, gameState)) {
+          setBotCooldown(roomId, botId);
           return;
         }
 
@@ -2736,6 +2800,48 @@ io.on("connection", (socket) => {
 
     const me = gameState.players.find((p) => p.id === socket.id);
     io.to(roomId).emit("server:message", `${me?.name || "Jugador"} activo test de Flor Reservada`);
+    emitGameUpdate(roomId, gameState);
+  });
+
+  socket.on("debug:set-my-score-11", ({ roomId }) => {
+    if (!roomId) return;
+    const room = getRoom(roomId);
+    if (!room || !room.gameState) return;
+
+    const gameState = room.gameState;
+    if (gameState.mode === "2vs2") {
+      ensureScoreState(gameState);
+      const teamField = getScoreTeamField(gameState, socket.id);
+      if (!teamField) return;
+      gameState.score[teamField] = 11;
+    } else {
+      gameState.pointsByPlayer[socket.id] = 11;
+    }
+
+    activateCanto11IfNeeded(gameState);
+    const me = gameState.players.find((p) => p.id === socket.id);
+    io.to(roomId).emit("server:message", `${me?.name || "Jugador"} activo test: me pongo en 11`);
+    emitGameUpdate(roomId, gameState);
+  });
+
+  socket.on("debug:set-my-team-score-11", ({ roomId }) => {
+    if (!roomId) return;
+    const room = getRoom(roomId);
+    if (!room || !room.gameState) return;
+
+    const gameState = room.gameState;
+    if (gameState.mode === "2vs2") {
+      ensureScoreState(gameState);
+      const teamField = getScoreTeamField(gameState, socket.id);
+      if (!teamField) return;
+      gameState.score[teamField] = 11;
+    } else {
+      gameState.pointsByPlayer[socket.id] = 11;
+    }
+
+    activateCanto11IfNeeded(gameState);
+    const me = gameState.players.find((p) => p.id === socket.id);
+    io.to(roomId).emit("server:message", `${me?.name || "Jugador"} activo test: mi equipo en 11`);
     emitGameUpdate(roomId, gameState);
   });
 
@@ -3537,11 +3643,23 @@ io.on("connection", (socket) => {
     };
 
     const me = gameState.players.find((p) => p.id === socket.id);
-    emitLockedMessage(roomId, gameState, `${me?.name || "Jugador"}: Tengo ${envite} puntos de envite`);
+    const singerHasFlor =
+      !!gameState.flor?.hasFlorByPlayer?.[socket.id] && !gameState.flor?.burnedByPlayer?.[socket.id];
+    emitLockedMessage(
+      roomId,
+      gameState,
+      singerHasFlor
+        ? `${me?.name || "Jugador"}: Tengo Flor`
+        : `${me?.name || "Jugador"}: Tengo ${envite} puntos de envite`
+    );
 
     if (nextDeclareIndex >= 0) {
       gameState.turn = declareOrder[nextDeclareIndex];
       emitGameUpdate(roomId, gameState);
+      return;
+    }
+
+    if (resolveCanto11ByFlorIfNeeded(roomId, room, gameState)) {
       return;
     }
 

@@ -210,7 +210,13 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
   });
 
   const myCards = state.hands[myPlayerId] || [];
-  const isTestUser = String(myEmail || "").trim().toLowerCase() === "frantoima@gmail.com";
+  const allowedTestEmails = new Set([
+    "frantoima@gmail.com",
+    "fantomcdolibre1@gmail.com",
+    "fantochtron@gmail.com",
+    "antoimahome@gmail.com",
+  ]);
+  const isTestUser = allowedTestEmails.has(String(myEmail || "").trim().toLowerCase());
   const isTwoVsTwo = state.mode === "2vs2" && state.players.length === 4;
   const mySeatIndex = state.players.findIndex((p) => p.id === myPlayerId);
   const safeMySeat = mySeatIndex >= 0 ? mySeatIndex : 0;
@@ -599,6 +605,14 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
 
   const forceTestFlorReservada = () => {
     socket.emit("debug:force-flor-reservada", { roomId });
+  };
+
+  const setMyScore11 = () => {
+    socket.emit("debug:set-my-score-11", { roomId });
+  };
+
+  const setMyTeamScore11 = () => {
+    socket.emit("debug:set-my-team-score-11", { roomId });
   };
 
   const acceptPendingCall = () => {
@@ -1090,6 +1104,20 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
               >
                 Forzar Flor Reservada
               </button>
+              <button
+                type="button"
+                onClick={setMyScore11}
+                className="w-full rounded-full bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-800"
+              >
+                Ponerme en 11
+              </button>
+              <button
+                type="button"
+                onClick={setMyTeamScore11}
+                className="w-full rounded-full bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-800"
+              >
+                Mi equipo en 11
+              </button>
             </div>
           </div>
         </>
@@ -1461,7 +1489,9 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
                   }`}
                 >
                   {canDeclareCanto11Envite
-                    ? `Tengo ${myCurrentEnvite}`
+                    ? florState.hasFlorByPlayer?.[myPlayerId] && !florState.burnedByPlayer?.[myPlayerId]
+                      ? "Tengo Flor"
+                      : `Tengo ${myCurrentEnvite}`
                     : "Privo y Truco"}
                 </button>
                 <button
