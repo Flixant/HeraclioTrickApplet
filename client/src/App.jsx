@@ -856,19 +856,25 @@ function App() {
                 {show1v1Rooms ? "-" : "+"}
               </span>
             </button>
-            {show1v1Rooms && (
-              <div
-                className={`space-y-3 ${
-                  needsScroll1v1 ? "max-h-[28.5rem] overflow-y-auto pr-1" : ""
-                }`}
-              >
-                {rooms1v1.length ? rooms1v1.map((room) => renderRoomCard(room)) : (
-                  <p className="rounded-xl bg-emerald-950/45 px-3 py-2 text-sm text-emerald-200/70">
-                    No hay salas 1vs1 disponibles.
-                  </p>
-                )}
+            <div
+              className={`grid overflow-hidden transition-[grid-template-rows,margin-top] duration-300 ease-out ${
+                show1v1Rooms ? "mt-3 grid-rows-[1fr]" : "mt-0 grid-rows-[0fr]"
+              }`}
+            >
+              <div className="min-h-0 overflow-hidden">
+                <div
+                  className={`space-y-3 ${
+                    needsScroll1v1 ? "max-h-[28.5rem] overflow-y-auto pr-1" : ""
+                  }`}
+                >
+                  {rooms1v1.length ? rooms1v1.map((room) => renderRoomCard(room)) : (
+                    <p className="rounded-xl bg-emerald-950/45 px-3 py-2 text-sm text-emerald-200/70">
+                      No hay salas 1vs1 disponibles.
+                    </p>
+                  )}
+                </div>
               </div>
-            )}
+            </div>
           </div>
 
           <div className="rounded-2xl border border-emerald-300/15 bg-emerald-900/25 p-3">
@@ -884,19 +890,25 @@ function App() {
                 {show2v2Rooms ? "-" : "+"}
               </span>
             </button>
-            {show2v2Rooms && (
-              <div
-                className={`space-y-3 ${
-                  needsScroll2v2 ? "max-h-[28.5rem] overflow-y-auto pr-1" : ""
-                }`}
-              >
-                {rooms2v2.length ? rooms2v2.map((room) => renderRoomCard(room)) : (
-                  <p className="rounded-xl bg-emerald-950/45 px-3 py-2 text-sm text-emerald-200/70">
-                    No hay salas 2vs2 disponibles.
-                  </p>
-                )}
+            <div
+              className={`grid overflow-hidden transition-[grid-template-rows,margin-top] duration-300 ease-out ${
+                show2v2Rooms ? "mt-3 grid-rows-[1fr]" : "mt-0 grid-rows-[0fr]"
+              }`}
+            >
+              <div className="min-h-0 overflow-hidden">
+                <div
+                  className={`space-y-3 ${
+                    needsScroll2v2 ? "max-h-[28.5rem] overflow-y-auto pr-1" : ""
+                  }`}
+                >
+                  {rooms2v2.length ? rooms2v2.map((room) => renderRoomCard(room)) : (
+                    <p className="rounded-xl bg-emerald-950/45 px-3 py-2 text-sm text-emerald-200/70">
+                      No hay salas 2vs2 disponibles.
+                    </p>
+                  )}
+                </div>
               </div>
-            )}
+            </div>
           </div>
         </section>
 
