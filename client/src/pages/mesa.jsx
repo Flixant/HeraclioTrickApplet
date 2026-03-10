@@ -338,12 +338,17 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
     state.deckConfig.allowedSuits.length === 2 &&
     state.deckConfig.allowedSuits.includes("bastos") &&
     state.deckConfig.allowedSuits.includes("espadas");
-  const viraPositionClassByOffset = {
-    0: "left-4 bottom-4 sm:left-6 sm:bottom-6", // Sur: izquierda del local
-    1: "left-4 top-4 sm:left-6 sm:top-6", // Oeste: izquierda del oeste (hacia arriba)
-    2: "right-4 top-4 sm:right-6 sm:top-6", // Norte: izquierda del norte (hacia derecha)
-    3: "right-4 bottom-4 sm:right-6 sm:bottom-6", // Este: izquierda del este (hacia abajo)
-  };
+  const viraPositionClassByOffset = isTwoVsTwo
+    ? {
+        0: "left-4 bottom-4 sm:left-6 sm:bottom-6", // Sur: izquierda del local
+        1: "left-4 top-4 sm:left-6 sm:top-6", // Oeste: izquierda del oeste (hacia arriba)
+        2: "right-4 top-4 sm:right-6 sm:top-6", // Norte: izquierda del norte (hacia derecha)
+        3: "right-4 bottom-4 sm:right-6 sm:bottom-6", // Este: izquierda del este (hacia abajo)
+      }
+    : {
+        0: "left-4 bottom-4 sm:left-6 sm:bottom-6", // Yo inicio: vira a mi izquierda
+        1: "right-4 top-4 sm:right-6 sm:top-6", // Rival inicia: vira a su izquierda (mi derecha visual)
+      };
   const viraPositionClass =
     viraPositionClassByOffset[starterOffset] || "left-4 bottom-4 sm:left-6 sm:bottom-6";
 
@@ -544,6 +549,11 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
   const runAdvancedCanto = (action) => {
     action?.();
     setShowAdvancedCantos(false);
+  };
+
+  const runAdvancedJugada = (action) => {
+    action?.();
+    setShowAdvancedJugadas(false);
   };
 
   const chooseReplay = () => {
@@ -1116,7 +1126,7 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
             <div className="rounded-lg bg-slate-50 p-2 shadow-[0_6px_14px_rgba(0,0,0,0.25)] sm:p-1.5">
               <button
                 type="button"
-                onClick={togglePassCard}
+                onClick={() => runAdvancedJugada(togglePassCard)}
                 disabled={!canPassCard}
                 className={`w-full rounded-md px-3 py-2 text-sm font-semibold text-white transition sm:py-1.5 sm:text-xs ${
                   !canPassCard
@@ -1130,7 +1140,7 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
               </button>
               <button
                 type="button"
-                onClick={playLey}
+                onClick={() => runAdvancedJugada(playLey)}
                 disabled={!canPlayLey}
                 className={`mt-2 w-full rounded-md px-3 py-2 text-sm font-semibold text-white transition sm:mt-1.5 sm:py-1.5 sm:text-xs ${
                   canPlayLey
@@ -1142,7 +1152,7 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", onLeaveToRoomList }) {
               </button>
               <button
                 type="button"
-                onClick={goMazo}
+                onClick={() => runAdvancedJugada(goMazo)}
                 disabled={!canGoMazo}
                 className={`mt-2 w-full rounded-md px-3 py-2 text-sm font-semibold text-white transition sm:mt-1.5 sm:py-1.5 sm:text-xs ${
                   canGoMazo
