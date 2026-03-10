@@ -846,6 +846,45 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
     );
   };
 
+  const renderPlayedFan = (cards, options = {}) => {
+    const { fromNorth = false, rotateDeg = 0 } = options;
+    const total = cards.length;
+    if (!total) return null;
+
+    const spread = Math.min(56, 30 + total * 9);
+    const center = (total - 1) / 2;
+
+    return (
+      <div className="relative h-[92px] w-[130px]">
+        {cards.map((card, index) => {
+          const angleStep = total > 1 ? spread / (total - 1) : 0;
+          const angle = -spread / 2 + angleStep * index;
+          const centerDist = Math.abs(index - center);
+          const maxDist = center || 1;
+          const arcFactor = 1 - centerDist / maxDist;
+          const arcPx = Math.round(arcFactor * 12);
+          const yOffset = fromNorth ? arcPx : -arcPx;
+          const xOffset = Math.round((index - center) * 22);
+          const baseRotate = fromNorth ? 180 - angle : angle;
+          const totalRotate = baseRotate + rotateDeg;
+          return (
+            <div
+              key={`${card.playerId}-${card.suit}-${card.value}-${index}`}
+              className="absolute left-1/2 top-0"
+              style={{
+                marginLeft: `${xOffset}px`,
+                transform: `translateX(-50%) translateY(${yOffset}px) rotate(${totalRotate}deg)`,
+                zIndex: total - index,
+              }}
+            >
+              {renderDeckCardOrFallback(card)}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   const renderFanHand = (cards, options = {}) => {
     const { fromNorth = false, playable = false, selectedIndexes = [] } = options;
     const total = cards.length;
@@ -1485,7 +1524,7 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
                   type="button"
                   onClick={canDeclareCanto11Envite ? declareCanto11Envite : canCanto11Privo ? callCanto11PrivoTruco : undefined}
                   disabled={!(canDeclareCanto11Envite || canCanto11Privo)}
-                  className={`flex-1 rounded-full px-3 py-2 text-sm font-semibold text-white transition sm:py-1 sm:text-xs ${
+                  className={`flex-1 rounded-full px-3 py-2 text-xs font-semibold text-white transition sm:py-1 ${
                     canDeclareCanto11Envite || canCanto11Privo
                       ? "bg-emerald-700 hover:bg-emerald-800"
                       : "cursor-not-allowed bg-slate-400"
@@ -1501,7 +1540,7 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
                   type="button"
                   onClick={callCanto11NoPrivo}
                   disabled={!canCanto11NoPrivo}
-                  className={`flex-1 rounded-full px-3 py-2 text-sm font-semibold text-white transition sm:py-1 sm:text-xs ${
+                  className={`flex-1 rounded-full px-3 py-2 text-xs font-semibold text-white transition sm:py-1 ${
                     canCanto11NoPrivo
                       ? "bg-gradient-to-r from-emerald-600 to-emerald-800 hover:from-emerald-700 hover:to-emerald-900"
                       : "cursor-not-allowed bg-slate-400"
@@ -1588,19 +1627,27 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
               </div>
 
               <div className="absolute left-1/2 top-[4%] -translate-x-1/2">
-                {renderPlayedStack(opponentPlayedCards, { fromNorth: true })}
+                {isCanto11DuelDeclaring
+                  ? renderPlayedFan(opponentPlayedCards, { fromNorth: true })
+                  : renderPlayedStack(opponentPlayedCards, { fromNorth: true })}
               </div>
               <div className="absolute left-1/2 bottom-[4%] -translate-x-1/2">
-                {renderPlayedStack(myPlayedCards)}
+                {isCanto11DuelDeclaring
+                  ? renderPlayedFan(myPlayedCards)
+                  : renderPlayedStack(myPlayedCards)}
               </div>
               {isTwoVsTwo && (
                 <div className="absolute left-[10%] top-1/2 -translate-y-1/2">
-                  {renderPlayedStack(leftPlayedCards, { rotateDeg: 90, stackAxis: "x", stackSign: -1 })}
+                  {isCanto11DuelDeclaring
+                    ? renderPlayedFan(leftPlayedCards, { rotateDeg: 90 })
+                    : renderPlayedStack(leftPlayedCards, { rotateDeg: 90, stackAxis: "x", stackSign: -1 })}
                 </div>
               )}
               {isTwoVsTwo && (
                 <div className="absolute right-[10%] top-1/2 -translate-y-1/2">
-                  {renderPlayedStack(rightPlayedCards, { rotateDeg: -90, stackAxis: "x", stackSign: 1 })}
+                  {isCanto11DuelDeclaring
+                    ? renderPlayedFan(rightPlayedCards, { rotateDeg: -90 })
+                    : renderPlayedStack(rightPlayedCards, { rotateDeg: -90, stackAxis: "x", stackSign: 1 })}
                 </div>
               )}
 

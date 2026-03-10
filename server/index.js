@@ -2268,19 +2268,22 @@ io.on("connection", (socket) => {
             ? `${me?.name || "Bot"}: Tengo Flor`
             : `${me?.name || "Bot"}: Tengo ${envite} puntos de envite`
         );
-        const cardsToReveal = snapshot[botId] || gameState.hands?.[botId] || [];
-        const now = Date.now();
-        gameState.tableCards = [
-          ...(gameState.tableCards || []),
-          ...cardsToReveal.map((card, index) => ({
-            playerId: botId,
-            card,
-            handNumber: 1,
-            isParda: false,
-            rank: resolveHandRank(card, gameState.vira),
-            playedAt: now + index,
-          })),
-        ];
+        if (isDuelDeclaring) {
+          const cardsToReveal = gameState.hands?.[botId] || snapshot[botId] || [];
+          const now = Date.now();
+          gameState.hands[botId] = [];
+          gameState.tableCards = [
+            ...(gameState.tableCards || []),
+            ...cardsToReveal.map((card, index) => ({
+              ...card,
+              playerId: botId,
+              handNumber: 1,
+              isParda: false,
+              rank: resolveHandRank(card, gameState.vira),
+              playedAt: now + index,
+            })),
+          ];
+        }
         if (nextDeclareIndex >= 0) {
           gameState.turn = declareOrder[nextDeclareIndex];
           setBotCooldown(roomId, botId);
@@ -3743,19 +3746,22 @@ io.on("connection", (socket) => {
       declareIndex: nextDeclareIndex >= 0 ? nextDeclareIndex : declareOrder.length,
     };
 
-    const cardsToReveal = snapshot[socket.id] || gameState.hands?.[socket.id] || [];
-    const now = Date.now();
-    gameState.tableCards = [
-      ...(gameState.tableCards || []),
-      ...cardsToReveal.map((card, index) => ({
-        playerId: socket.id,
-        card,
-        handNumber: 1,
-        isParda: false,
-        rank: resolveHandRank(card, gameState.vira),
-        playedAt: now + index,
-      })),
-    ];
+    if (isDuelDeclaring) {
+      const cardsToReveal = gameState.hands?.[socket.id] || snapshot[socket.id] || [];
+      const now = Date.now();
+      gameState.hands[socket.id] = [];
+      gameState.tableCards = [
+        ...(gameState.tableCards || []),
+        ...cardsToReveal.map((card, index) => ({
+          ...card,
+          playerId: socket.id,
+          handNumber: 1,
+          isParda: false,
+          rank: resolveHandRank(card, gameState.vira),
+          playedAt: now + index,
+        })),
+      ];
+    }
 
     const me = gameState.players.find((p) => p.id === socket.id);
     const singerHasFlor =
