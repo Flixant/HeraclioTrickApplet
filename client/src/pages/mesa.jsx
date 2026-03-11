@@ -131,6 +131,8 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
   });
   const roundCounterRef = useRef(1);
   const suppressMessagesRef = useRef(false);
+  const historyHydratedRef = useRef(false);
+  const historyStorageKey = roomId ? `truco_history_${roomId}` : null;
 
   const clampFloatingClockPos = (x, y) => {
     if (typeof window === "undefined") return { x, y };
@@ -161,6 +163,54 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
       return next.slice(0, 120);
     });
   };
+
+  useEffect(() => {
+    historyHydratedRef.current = false;
+    if (!historyStorageKey || typeof window === "undefined") {
+      historyHydratedRef.current = true;
+      return;
+    }
+    try {
+      const raw = window.sessionStorage.getItem(historyStorageKey);
+      if (!raw) {
+        setMessageHistory([]);
+        setTimeout(() => {
+          if (historyStorageKey) historyHydratedRef.current = true;
+        }, 0);
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        setMessageHistory([]);
+        setTimeout(() => {
+          if (historyStorageKey) historyHydratedRef.current = true;
+        }, 0);
+        return;
+      }
+      setMessageHistory(parsed.slice(0, 120));
+      setTimeout(() => {
+        if (historyStorageKey) historyHydratedRef.current = true;
+      }, 0);
+    } catch {
+      setMessageHistory([]);
+      setTimeout(() => {
+        if (historyStorageKey) historyHydratedRef.current = true;
+      }, 0);
+    }
+  }, [historyStorageKey]);
+
+  useEffect(() => {
+    if (!historyStorageKey || typeof window === "undefined") return;
+    if (!historyHydratedRef.current) return;
+    try {
+      window.sessionStorage.setItem(
+        historyStorageKey,
+        JSON.stringify((messageHistory || []).slice(0, 120))
+      );
+    } catch {
+      // ignore storage quota/security errors
+    }
+  }, [historyStorageKey, messageHistory]);
 
   const formatCardForHistory = (card) => {
     if (!card) return "carta";
@@ -259,7 +309,6 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
     setMessage("");
     setShowEnvidoStoneSlider(false);
     setShowHistoryPanel(false);
-    setMessageHistory([]);
     setRemoteAvatarLoadFailed({});
     setMatchModalVisible(false);
     setSuppressMessagesForMatchEnd(false);

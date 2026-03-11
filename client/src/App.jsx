@@ -523,8 +523,13 @@ function App() {
     autoJoinAttemptRef.current = "";
     window.history.replaceState({}, "", "/");
     const previousRoomId = roomId;
+    const leavingAfterMatchEnd = !!gameState?.matchEnded;
     if (previousRoomId) {
-      socket.emit("room:away", { roomId: previousRoomId, away: true });
+      if (leavingAfterMatchEnd) {
+        socket.emit("room:leave");
+      } else {
+        socket.emit("room:away", { roomId: previousRoomId, away: true });
+      }
     }
     setGameState(null);
     setRoomId(null);
@@ -534,7 +539,7 @@ function App() {
       playerName: effectivePlayerName,
       profileId: currentProfile?.profileId || readStoredSession().profileId || null,
       reconnectToken,
-      roomId: previousRoomId || null,
+      roomId: leavingAfterMatchEnd ? null : previousRoomId || null,
     });
     socket.emit("rooms:list");
   };

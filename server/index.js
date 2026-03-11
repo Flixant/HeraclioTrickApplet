@@ -125,6 +125,49 @@ function ensureAwayByPlayer(gameState) {
   }
 }
 
+function unsubscribePlayerSeat(roomId, playerId, reason = "manual") {
+  if (!roomId || !playerId) return false;
+  const room = getRoom(roomId);
+  if (!room) return false;
+
+  const hadSeat = room.players.some((p) => p.id === playerId);
+  if (!hadSeat) return false;
+
+  room.players = room.players.filter((p) => p.id !== playerId);
+
+  if (room.gameState) {
+    ensureAwayByPlayer(room.gameState);
+    delete room.gameState.awayByPlayer[playerId];
+    if (room.gameState.rematch?.decisionsByPlayer) {
+      delete room.gameState.rematch.decisionsByPlayer[playerId];
+    }
+  }
+
+  const client = io.sockets.sockets.get(playerId);
+  if (client) {
+    client.leave(roomId);
+    if (client.data?.roomId === roomId) {
+      client.data.roomId = null;
+    }
+  }
+
+  if (!room.gameState && room.players.length === 0) {
+    room.status = "waiting";
+  }
+
+  turnTimerLog("seat-unsubscribe", {
+    roomId,
+    playerId,
+    reason,
+    remainingSeats: room.players.length,
+    hasGameState: !!room.gameState,
+  });
+
+  io.to(roomId).emit("room:update", room);
+  emitRooms();
+  return true;
+}
+
 function resolveAwayForfeit(roomId, absentPlayerId, reason = "ausencia") {
   const room = getRoom(roomId);
   const gameState = room?.gameState;
@@ -167,6 +210,7 @@ function resolveAwayForfeit(roomId, absentPlayerId, reason = "ausencia") {
   clearRoomTurnPlayTimer(roomId);
   emitRooms();
   emitGameUpdate(roomId, gameState);
+  unsubscribePlayerSeat(roomId, absentPlayerId, "away-timeout");
   return true;
 }
 
@@ -232,10 +276,10 @@ function getLowestRankCardIndex(hand, vira) {
 }
 
 function scheduleRoomTurnPlayTimeout(roomId, gameState) {
-  clearRoomTurnPlayTimer(roomId);
   const room = getRoom(roomId);
   const armState = getTurnTimeoutArmState(room, gameState);
   if (!armState.canArm) {
+    clearRoomTurnPlayTimer(roomId);
     turnTimerLog("skip-arm", {
       roomId,
       turn: gameState?.turn || null,
@@ -272,6 +316,23 @@ function scheduleRoomTurnPlayTimeout(roomId, gameState) {
     }
     return;
   }
+
+  const existing = roomTurnPlayTimers.get(roomId);
+  const existingEndsAt = Number(gameState?.turnTimer?.endsAt || 0);
+  if (
+    existing &&
+    existing.turnId === gameState.turn &&
+    existingEndsAt > Date.now()
+  ) {
+    turnTimerLog("keep-existing", {
+      roomId,
+      turn: gameState.turn,
+      endsAt: existingEndsAt,
+    });
+    return;
+  }
+
+  clearRoomTurnPlayTimer(roomId);
 
   const armedTurnId = gameState.turn;
   const startedAt = Date.now();
@@ -3329,6 +3390,10 @@ io.on("connection", (socket) => {
     if (reclaimed) {
       ensureAwayByPlayer(targetRoom.gameState);
       targetRoom.gameState.awayByPlayer[socket.id] = false;
+      if (targetRoom.allowBots && targetRoom.gameState?.matchEnded) {
+        startGame(targetRoom);
+        activateCanto11IfNeeded(targetRoom.gameState);
+      }
       socket.join(roomId);
       socket.data.roomId = roomId;
       socket.data.reconnectToken = reconnectToken || null;
@@ -3361,6 +3426,10 @@ io.on("connection", (socket) => {
     }
 
     ensureBotRoomPlayers(result.room);
+    if (result.room.allowBots && result.room.gameState?.matchEnded) {
+      startGame(result.room);
+      activateCanto11IfNeeded(result.room.gameState);
+    }
     if (result.room.gameState) {
       ensureAwayByPlayer(result.room.gameState);
       result.room.gameState.awayByPlayer[socket.id] = false;
@@ -3409,13 +3478,18 @@ io.on("connection", (socket) => {
     if (!roomId) return;
 
     clearSeatTimeout(roomId, socket.id);
-    const room = removePlayer(roomId, socket.id);
+    const room = getRoom(roomId);
+    if (room?.gameState?.matchEnded) {
+      unsubscribePlayerSeat(roomId, socket.id, "room-leave-match-ended");
+      return;
+    }
 
+    const updatedRoom = removePlayer(roomId, socket.id);
     socket.leave(roomId);
     socket.data.roomId = null;
 
-    if (room) {
-      io.to(roomId).emit("room:update", room);
+    if (updatedRoom) {
+      io.to(roomId).emit("room:update", updatedRoom);
     }
 
     emitRooms();
