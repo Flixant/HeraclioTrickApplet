@@ -89,6 +89,37 @@ function computeEnvidoClient(cards, vira) {
   return Math.max(bestSingle, bestPair);
 }
 
+function getVoiceIceServers() {
+  const stunEnv = String(import.meta.env.VITE_WEBRTC_STUN_URLS || "").trim();
+  const turnUrlsEnv = String(import.meta.env.VITE_WEBRTC_TURN_URLS || import.meta.env.VITE_WEBRTC_TURN_URL || "").trim();
+  const turnUsername = String(import.meta.env.VITE_WEBRTC_TURN_USERNAME || "").trim();
+  const turnCredential = String(import.meta.env.VITE_WEBRTC_TURN_CREDENTIAL || "").trim();
+
+  const stunUrls = (stunEnv ? stunEnv.split(",") : [
+    "stun:stun.l.google.com:19302",
+    "stun:global.stun.twilio.com:3478",
+  ])
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  const iceServers = [];
+  if (stunUrls.length) {
+    iceServers.push({ urls: stunUrls });
+  }
+  const turnUrls = turnUrlsEnv
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (turnUrls.length && turnUsername && turnCredential) {
+    iceServers.push({
+      urls: turnUrls,
+      username: turnUsername,
+      credential: turnCredential,
+    });
+  }
+  return iceServers;
+}
+
 function Mesa({
   roomId,
   gameState,
@@ -116,6 +147,7 @@ function Mesa({
   const [showHistoryPanel, setShowHistoryPanel] = useState(false);
   const [messageHistory, setMessageHistory] = useState([]);
   const [micEnabled, setMicEnabled] = useState(false);
+  const [voiceSpeakingByPlayer, setVoiceSpeakingByPlayer] = useState({});
   const [selectedPlayerForModal, setSelectedPlayerForModal] = useState(null);
   const [selectedPlayerStats, setSelectedPlayerStats] = useState(null);
   const [selectedPlayerStatsLoading, setSelectedPlayerStatsLoading] = useState(false);
@@ -146,6 +178,13 @@ function Mesa({
   const roundCounterRef = useRef(1);
   const suppressMessagesRef = useRef(false);
   const historyHydratedRef = useRef(false);
+  const localVoiceStreamRef = useRef(null);
+  const voiceRoomJoinedRef = useRef(null);
+  const voicePeerConnectionsRef = useRef(new Map());
+  const voiceRemoteAudioRef = useRef(new Map());
+  const voiceMonitorCleanupRef = useRef(new Map());
+  const voiceAudioContextRef = useRef(null);
+  const voiceSpeakingCacheRef = useRef({});
   const historyStorageKey = roomId ? `truco_history_${roomId}` : null;
 
   const clampFloatingClockPos = (x, y) => {
@@ -156,6 +195,101 @@ function Mesa({
       x: Math.min(Math.max(FLOAT_CLOCK_EDGE_GAP, x), maxX),
       y: Math.min(Math.max(FLOAT_CLOCK_EDGE_GAP, y), maxY),
     };
+  };
+
+  const setVoiceSpeakingFlag = (playerId, speaking) => {
+    if (!playerId) return;
+    const prev = !!voiceSpeakingCacheRef.current[playerId];
+    if (prev === speaking) return;
+    voiceSpeakingCacheRef.current[playerId] = speaking;
+    setVoiceSpeakingByPlayer((current) => {
+      const next = { ...current };
+      if (speaking) {
+        next[playerId] = true;
+      } else {
+        delete next[playerId];
+      }
+      return next;
+    });
+  };
+
+  const stopVoiceMonitor = (playerId) => {
+    const cleanup = voiceMonitorCleanupRef.current.get(playerId);
+    if (typeof cleanup === "function") {
+      cleanup();
+    }
+    voiceMonitorCleanupRef.current.delete(playerId);
+    setVoiceSpeakingFlag(playerId, false);
+  };
+
+  const startVoiceMonitor = (playerId, stream) => {
+    if (!playerId || !stream || typeof window === "undefined") return;
+    stopVoiceMonitor(playerId);
+    try {
+      const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextCtor) return;
+      const context = voiceAudioContextRef.current || new AudioContextCtor();
+      voiceAudioContextRef.current = context;
+      context.resume?.().catch(() => {});
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 256;
+      const source = context.createMediaStreamSource(stream);
+      source.connect(analyser);
+      const data = new Uint8Array(analyser.fftSize);
+      let rafId = null;
+      let speakingUntil = 0;
+      const tick = () => {
+        analyser.getByteTimeDomainData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i += 1) {
+          sum += Math.abs(data[i] - 128);
+        }
+        const level = sum / data.length;
+        const now = Date.now();
+        if (level > 10) {
+          speakingUntil = now + 220;
+        }
+        setVoiceSpeakingFlag(playerId, speakingUntil > now);
+        rafId = window.requestAnimationFrame(tick);
+      };
+      tick();
+      voiceMonitorCleanupRef.current.set(playerId, () => {
+        if (rafId != null) {
+          window.cancelAnimationFrame(rafId);
+        }
+        source.disconnect();
+      });
+    } catch {
+      // ignore audio context failures
+    }
+  };
+
+  const clearAllVoiceResources = ({ stopLocalStream = false } = {}) => {
+    for (const [peerId, pc] of voicePeerConnectionsRef.current.entries()) {
+      try {
+        pc.ontrack = null;
+        pc.onicecandidate = null;
+        pc.close();
+      } catch {}
+      voicePeerConnectionsRef.current.delete(peerId);
+    }
+    for (const [peerId, audio] of voiceRemoteAudioRef.current.entries()) {
+      try {
+        audio.pause();
+        audio.srcObject = null;
+      } catch {}
+      stopVoiceMonitor(peerId);
+      voiceRemoteAudioRef.current.delete(peerId);
+    }
+    for (const playerId of voiceMonitorCleanupRef.current.keys()) {
+      stopVoiceMonitor(playerId);
+    }
+    if (stopLocalStream && localVoiceStreamRef.current) {
+      try {
+        localVoiceStreamRef.current.getTracks().forEach((track) => track.stop());
+      } catch {}
+      localVoiceStreamRef.current = null;
+    }
   };
 
   const pushHistoryEntry = (text, contextState) => {
@@ -515,6 +649,239 @@ function Mesa({
     if (idx < 0) return null;
     return idx % 2 === 0 ? "team1" : "team2";
   };
+
+  useEffect(() => {
+    if (!roomId || !myPlayerId) return undefined;
+    let disposed = false;
+    const iceServers = getVoiceIceServers();
+
+    const removePeer = (peerId) => {
+      const pc = voicePeerConnectionsRef.current.get(peerId);
+      if (pc) {
+        try {
+          pc.ontrack = null;
+          pc.onicecandidate = null;
+          pc.close();
+        } catch {}
+        voicePeerConnectionsRef.current.delete(peerId);
+      }
+      const audio = voiceRemoteAudioRef.current.get(peerId);
+      if (audio) {
+        try {
+          audio.pause();
+          audio.srcObject = null;
+        } catch {}
+        voiceRemoteAudioRef.current.delete(peerId);
+      }
+      stopVoiceMonitor(peerId);
+    };
+
+    const createPeerConnection = (peerId) => {
+      if (!peerId || peerId === socket.id) return null;
+      const existing = voicePeerConnectionsRef.current.get(peerId);
+      if (existing) return existing;
+      const pc = new RTCPeerConnection({ iceServers });
+      voicePeerConnectionsRef.current.set(peerId, pc);
+      pc.onicecandidate = (event) => {
+        if (!event.candidate) return;
+        socket.emit("voice:signal", {
+          roomId,
+          toId: peerId,
+          candidate: event.candidate,
+        });
+      };
+      pc.ontrack = (event) => {
+        const stream = event.streams?.[0];
+        if (!stream) return;
+        let audio = voiceRemoteAudioRef.current.get(peerId);
+        if (!audio) {
+          audio = new Audio();
+          audio.autoplay = true;
+          audio.playsInline = true;
+          voiceRemoteAudioRef.current.set(peerId, audio);
+        }
+        if (audio.srcObject !== stream) {
+          audio.srcObject = stream;
+          audio.play().catch(() => {});
+          startVoiceMonitor(peerId, stream);
+        }
+      };
+      pc.onconnectionstatechange = () => {
+        const stateValue = String(pc.connectionState || "");
+        if (stateValue === "failed" || stateValue === "closed" || stateValue === "disconnected") {
+          removePeer(peerId);
+        }
+      };
+      return pc;
+    };
+
+    const addLocalTracksIfNeeded = (pc) => {
+      const stream = localVoiceStreamRef.current;
+      if (!pc || !stream) return;
+      const senders = pc.getSenders();
+      stream.getAudioTracks().forEach((track) => {
+        const alreadyAdded = senders.some((sender) => sender.track && sender.track.id === track.id);
+        if (!alreadyAdded) {
+          pc.addTrack(track, stream);
+        }
+      });
+    };
+
+    const createOfferForPeer = async (peerId) => {
+      try {
+        const pc = createPeerConnection(peerId);
+        if (!pc) return;
+        if (pc.signalingState !== "stable") return;
+        addLocalTracksIfNeeded(pc);
+        const offer = await pc.createOffer({ offerToReceiveAudio: true });
+        await pc.setLocalDescription(offer);
+        socket.emit("voice:signal", {
+          roomId,
+          toId: peerId,
+          description: pc.localDescription,
+        });
+      } catch {}
+    };
+
+    const onVoicePeers = ({ roomId: payloadRoomId, peerIds }) => {
+      if (payloadRoomId !== roomId || disposed) return;
+      (peerIds || [])
+        .filter((peerId) => peerId && peerId !== socket.id)
+        .forEach((peerId) => {
+          createOfferForPeer(peerId);
+        });
+    };
+
+    const onVoicePeerJoined = ({ roomId: payloadRoomId, peerId }) => {
+      if (payloadRoomId !== roomId || disposed) return;
+      if (!peerId || peerId === socket.id) return;
+      // deterministic initiator to avoid offer glare
+      if (String(socket.id) < String(peerId)) {
+        createOfferForPeer(peerId);
+      }
+    };
+
+    const onVoicePeerLeft = ({ roomId: payloadRoomId, peerId }) => {
+      if (payloadRoomId !== roomId || disposed) return;
+      removePeer(peerId);
+    };
+
+    const onVoiceSignal = async ({ roomId: payloadRoomId, fromId, description, candidate }) => {
+      if (payloadRoomId !== roomId || disposed) return;
+      if (!fromId || fromId === socket.id) return;
+      const pc = createPeerConnection(fromId);
+      if (!pc) return;
+      try {
+        if (description) {
+          if (description.type === "offer") {
+            addLocalTracksIfNeeded(pc);
+            await pc.setRemoteDescription(new RTCSessionDescription(description));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            socket.emit("voice:signal", {
+              roomId,
+              toId: fromId,
+              description: pc.localDescription,
+            });
+          } else if (description.type === "answer") {
+            await pc.setRemoteDescription(new RTCSessionDescription(description));
+          }
+        } else if (candidate) {
+          await pc.addIceCandidate(candidate);
+        }
+      } catch {}
+    };
+
+    socket.on("voice:peers", onVoicePeers);
+    socket.on("voice:peer-joined", onVoicePeerJoined);
+    socket.on("voice:peer-left", onVoicePeerLeft);
+    socket.on("voice:signal", onVoiceSignal);
+
+    if (voiceRoomJoinedRef.current !== roomId) {
+      socket.emit("voice:join", { roomId });
+      voiceRoomJoinedRef.current = roomId;
+    }
+
+    return () => {
+      disposed = true;
+      socket.off("voice:peers", onVoicePeers);
+      socket.off("voice:peer-joined", onVoicePeerJoined);
+      socket.off("voice:peer-left", onVoicePeerLeft);
+      socket.off("voice:signal", onVoiceSignal);
+      if (voiceRoomJoinedRef.current === roomId) {
+        socket.emit("voice:leave", { roomId });
+        voiceRoomJoinedRef.current = null;
+      }
+      clearAllVoiceResources({ stopLocalStream: true });
+      try {
+        voiceAudioContextRef.current?.close?.();
+      } catch {}
+      voiceAudioContextRef.current = null;
+    };
+  }, [myPlayerId, roomId]);
+
+  useEffect(() => {
+    if (!roomId || !myPlayerId) return;
+    if (!micEnabled) {
+      if (localVoiceStreamRef.current) {
+        localVoiceStreamRef.current.getAudioTracks().forEach((track) => {
+          track.enabled = false;
+        });
+      }
+      setVoiceSpeakingFlag(myPlayerId, false);
+      return;
+    }
+    let cancelled = false;
+    const enableMic = async () => {
+      try {
+        if (!navigator?.mediaDevices?.getUserMedia) {
+          throw new Error("getUserMedia no disponible");
+        }
+        if (!localVoiceStreamRef.current) {
+          localVoiceStreamRef.current = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+            },
+            video: false,
+          });
+        }
+        if (cancelled || !localVoiceStreamRef.current) return;
+        localVoiceStreamRef.current.getAudioTracks().forEach((track) => {
+          track.enabled = true;
+        });
+        startVoiceMonitor(myPlayerId, localVoiceStreamRef.current);
+        voicePeerConnectionsRef.current.forEach((pc) => {
+          const senders = pc.getSenders();
+        const renegotiatePeers = new Set();
+        localVoiceStreamRef.current.getAudioTracks().forEach((track) => {
+          const existingSender = senders.find((sender) => sender.track && sender.track.kind === "audio");
+          if (existingSender && existingSender.track?.id !== track.id) {
+            existingSender.replaceTrack(track).catch(() => {});
+          } else if (!existingSender) {
+            pc.addTrack(track, localVoiceStreamRef.current);
+            const peerId = [...voicePeerConnectionsRef.current.entries()].find(([, item]) => item === pc)?.[0];
+            if (peerId) renegotiatePeers.add(peerId);
+          }
+        });
+          renegotiatePeers.forEach((peerId) => {
+            createOfferForPeer(peerId);
+          });
+        });
+        socket.emit("voice:join", { roomId });
+      } catch {
+        if (!cancelled) {
+          setMicEnabled(false);
+          setMessage("No se pudo activar el microfono");
+        }
+      }
+    };
+    enableMic();
+    return () => {
+      cancelled = true;
+    };
+  }, [micEnabled, myPlayerId, roomId]);
 
   useEffect(() => {
     if (!selectedPlayerForModal) return undefined;
@@ -907,8 +1274,12 @@ function Mesa({
     const ringOffset = circumference * (1 - ringProgress);
     const ringColorClass =
       ringProgress <= 0.2 ? "text-rose-500" : ringProgress <= 0.45 ? "text-amber-400" : "text-emerald-400";
+    const isVoiceSpeaking = !!(player?.id && voiceSpeakingByPlayer[player.id]);
     return (
       <div className={`relative mx-auto mb-1 ${sizeClass}`}>
+        {isVoiceSpeaking && (
+          <span className="pointer-events-none absolute -inset-[6px] z-[9] rounded-full border-2 border-cyan-300/80 [animation:mesaVoicePulse_900ms_ease-out_infinite]" />
+        )}
         {showTurnCountdownRing && (
           <svg className={`pointer-events-none absolute -inset-[3px] z-10 ${ringColorClass}`} viewBox="0 0 42 42">
             <circle cx="21" cy="21" r="18" fill="none" stroke="currentColor" strokeOpacity="0.22" strokeWidth="2.8" />
@@ -929,7 +1300,9 @@ function Mesa({
         <button
           type="button"
           onClick={() => openPlayerProfileModal(player)}
-          className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-[#0d6b50] font-bold text-white shadow outline-none transition hover:scale-[1.04] focus-visible:ring-2 focus-visible:ring-emerald-300/80"
+          className={`flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-[#0d6b50] font-bold text-white shadow outline-none transition hover:scale-[1.04] focus-visible:ring-2 focus-visible:ring-emerald-300/80 ${
+            isVoiceSpeaking ? "ring-2 ring-cyan-300/70" : ""
+          }`}
         >
           {avatar && !failed ? (
             <img
@@ -1659,6 +2032,7 @@ function Mesa({
     turnTimerRemainingMs: activeTurnTimerRemainingMs,
     turnTimerDurationMs: activeTurnTimerDurationMs,
     myPlayerId,
+    isVoiceSpeaking: !!voiceSpeakingByPlayer[myPlayerId],
   };
 
   return (
@@ -1887,6 +2261,20 @@ function Mesa({
           100% {
             opacity: 0;
             transform: translateY(8px);
+          }
+        }
+        @keyframes mesaVoicePulse {
+          0% {
+            opacity: 0.85;
+            transform: scale(0.92);
+          }
+          70% {
+            opacity: 0;
+            transform: scale(1.22);
+          }
+          100% {
+            opacity: 0;
+            transform: scale(1.22);
           }
         }
         @keyframes mesaModalBackdropIn {

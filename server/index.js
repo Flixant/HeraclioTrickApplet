@@ -87,6 +87,7 @@ const botRematchVoteTimers = new Map();
 const roomMessageTimers = new Map();
 const disconnectedSeatTimeouts = new Map();
 const roomTurnPlayTimers = new Map();
+const voiceParticipantsByRoom = new Map();
 
 function turnTimerLog(...args) {
   if (!TURN_TIMER_DEBUG) return;
@@ -1622,8 +1623,79 @@ io.on("connection", (socket) => {
 
   socket.emit("rooms:update", getPublicRooms());
 
+  const removeFromVoiceRoom = (roomId, reason = "leave") => {
+    if (!roomId) return;
+    const participants = voiceParticipantsByRoom.get(roomId);
+    if (!participants) return;
+    const existed = participants.delete(socket.id);
+    if (!existed) return;
+    socket.to(roomId).emit("voice:peer-left", {
+      roomId,
+      peerId: socket.id,
+      reason,
+    });
+    if (participants.size === 0) {
+      voiceParticipantsByRoom.delete(roomId);
+    }
+    if (socket.data.voiceRoomId === roomId) {
+      socket.data.voiceRoomId = null;
+    }
+  };
+
+  const ensureInVoiceRoom = (roomId) => {
+    if (!roomId) return false;
+    if (socket.data.roomId !== roomId) return false;
+    const room = getRoom(roomId);
+    if (!room) return false;
+    const seated = room.players.some((p) => p.id === socket.id);
+    if (!seated) return false;
+    if (socket.data.voiceRoomId && socket.data.voiceRoomId !== roomId) {
+      removeFromVoiceRoom(socket.data.voiceRoomId, "switch-room");
+    }
+    const participants = voiceParticipantsByRoom.get(roomId) || new Set();
+    voiceParticipantsByRoom.set(roomId, participants);
+    participants.add(socket.id);
+    socket.data.voiceRoomId = roomId;
+    return true;
+  };
+
   socket.on("rooms:list", () => {
     socket.emit("rooms:update", getPublicRooms());
+  });
+
+  socket.on("voice:join", ({ roomId }) => {
+    const targetRoomId = roomId || socket.data.roomId;
+    if (!targetRoomId) return;
+    const joined = ensureInVoiceRoom(targetRoomId);
+    if (!joined) return;
+    const participants = voiceParticipantsByRoom.get(targetRoomId) || new Set();
+    const peerIds = [...participants].filter((id) => id !== socket.id);
+    socket.emit("voice:peers", { roomId: targetRoomId, peerIds });
+    socket.to(targetRoomId).emit("voice:peer-joined", {
+      roomId: targetRoomId,
+      peerId: socket.id,
+    });
+  });
+
+  socket.on("voice:signal", ({ roomId, toId, description, candidate }) => {
+    const targetRoomId = roomId || socket.data.voiceRoomId || socket.data.roomId;
+    if (!targetRoomId || !toId || toId === socket.id) return;
+    const participants = voiceParticipantsByRoom.get(targetRoomId);
+    if (!participants || !participants.has(socket.id) || !participants.has(toId)) return;
+    const targetSocket = io.sockets.sockets.get(toId);
+    if (!targetSocket) return;
+    if (targetSocket.data?.roomId !== targetRoomId) return;
+    io.to(toId).emit("voice:signal", {
+      roomId: targetRoomId,
+      fromId: socket.id,
+      description: description || null,
+      candidate: candidate || null,
+    });
+  });
+
+  socket.on("voice:leave", ({ roomId } = {}) => {
+    const targetRoomId = roomId || socket.data.voiceRoomId || socket.data.roomId;
+    removeFromVoiceRoom(targetRoomId, "manual");
   });
 
   socket.on("debug:bots", ({ enabled }) => {
@@ -3610,6 +3682,7 @@ function chooseBotCardIndex(gameState, botId, hand) {
       typeof playerUid === "string" && playerUid.trim() ? playerUid.trim() : null;
 
     if (currentRoom && currentRoom !== roomId) {
+      removeFromVoiceRoom(currentRoom, "switch-room");
       const oldRoom = removePlayer(currentRoom, socket.id);
       socket.leave(currentRoom);
 
@@ -3724,6 +3797,7 @@ function chooseBotCardIndex(gameState, botId, hand) {
   socket.on("room:leave", () => {
     const roomId = socket.data.roomId;
     if (!roomId) return;
+    removeFromVoiceRoom(roomId, "room-leave");
 
     clearSeatTimeout(roomId, socket.id);
     const room = getRoom(roomId);
@@ -5429,6 +5503,10 @@ function chooseBotCardIndex(gameState, botId, hand) {
     }
 
     const roomId = socket.data.roomId;
+    const voiceRoomId = socket.data.voiceRoomId;
+    if (voiceRoomId) {
+      removeFromVoiceRoom(voiceRoomId, "disconnect");
+    }
     if (!roomId) return;
 
     const room = getRoom(roomId);

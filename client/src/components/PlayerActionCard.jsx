@@ -32,6 +32,7 @@ function PlayerActionCard({
   turnTimerRemainingMs,
   turnTimerDurationMs,
   myPlayerId,
+  isVoiceSpeaking,
 }) {
   const showTurnCountdownRing =
     !!myPlayerId &&
@@ -69,7 +70,9 @@ function PlayerActionCard({
           <button
             type="button"
             onClick={onAvatarClick}
-            className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-[#0d6b50] text-sm font-bold text-white outline-none transition hover:scale-[1.04] focus-visible:ring-2 focus-visible:ring-emerald-300/80 sm:text-xs"
+            className={`flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-[#0d6b50] text-sm font-bold text-white outline-none transition hover:scale-[1.04] focus-visible:ring-2 focus-visible:ring-emerald-300/80 sm:text-xs ${
+              isVoiceSpeaking ? "ring-2 ring-cyan-300/80 animate-pulse" : ""
+            }`}
             title="Ver estadisticas"
           >
             {avatarUrl && !avatarLoadFailed ? (

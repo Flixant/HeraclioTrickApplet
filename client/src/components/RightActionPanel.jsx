@@ -94,6 +94,7 @@ export default function RightActionPanel({
     turnTimerRemainingMs,
     turnTimerDurationMs,
     myPlayerId,
+    isVoiceSpeaking,
   } = playerCard;
 
   return (
@@ -342,6 +343,7 @@ export default function RightActionPanel({
         turnTimerRemainingMs={turnTimerRemainingMs}
         turnTimerDurationMs={turnTimerDurationMs}
         myPlayerId={myPlayerId}
+        isVoiceSpeaking={isVoiceSpeaking}
       />
     </div>
   );
