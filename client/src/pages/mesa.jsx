@@ -654,6 +654,29 @@ function Mesa({
     } catch {}
   };
 
+  const syncLocalTracksToPeers = () => {
+    const localStream = localVoiceStreamRef.current;
+    if (!localStream) return;
+    const audioTracks = localStream.getAudioTracks();
+    if (!audioTracks.length) return;
+    voicePeerConnectionsRef.current.forEach((pc, peerId) => {
+      const senders = pc.getSenders();
+      const audioSender = senders.find((sender) => sender.track && sender.track.kind === "audio");
+      if (!audioSender) {
+        audioTracks.forEach((track) => {
+          pc.addTrack(track, localStream);
+        });
+        createVoiceOffer(peerId);
+      } else {
+        const preferredTrack = audioTracks[0];
+        if (preferredTrack && audioSender.track?.id !== preferredTrack.id) {
+          audioSender.replaceTrack(preferredTrack).catch(() => {});
+          createVoiceOffer(peerId);
+        }
+      }
+    });
+  };
+
   const stopVoiceSession = (reason = "manual", keepToggle = false) => {
     if (roomId) {
       socket.emit("voice:leave", { roomId });
@@ -671,7 +694,15 @@ function Mesa({
 
   const toggleVoiceMic = async () => {
     if (micEnabled) {
-      stopVoiceSession("disabled");
+      const localStream = localVoiceStreamRef.current;
+      if (localStream) {
+        localStream.getAudioTracks().forEach((track) => {
+          track.enabled = false;
+        });
+      }
+      clearVoiceMeter(myPlayerId || socket.id);
+      setMicEnabled(false);
+      micEnabledRef.current = false;
       return;
     }
     if (!roomId) return;
@@ -689,19 +720,28 @@ function Mesa({
       return;
     }
     try {
-      const localStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-        video: false,
-      });
+      let localStream = localVoiceStreamRef.current;
+      if (!localStream) {
+        localStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+          video: false,
+        });
+        localVoiceStreamRef.current = localStream;
+      } else {
+        localStream.getAudioTracks().forEach((track) => {
+          track.enabled = true;
+        });
+      }
       localVoiceStreamRef.current = localStream;
       micEnabledRef.current = true;
       await startVoiceMeter(myPlayerId || socket.id, localStream);
       setMicEnabled(true);
       socket.emit("voice:join", { roomId });
+      syncLocalTracksToPeers();
     } catch (error) {
       setMicEnabled(false);
       micEnabledRef.current = false;
@@ -726,7 +766,6 @@ function Mesa({
 
     const onVoicePeers = ({ roomId: incomingRoomId, peerIds = [] }) => {
       if (incomingRoomId && incomingRoomId !== roomId) return;
-      if (!micEnabledRef.current || !localVoiceStreamRef.current) return;
       peerIds.forEach((peerId) => {
         ensureVoicePeer(peerId);
         if (shouldInitiateWith(peerId)) {
@@ -738,7 +777,6 @@ function Mesa({
     const onVoicePeerJoined = ({ roomId: incomingRoomId, peerId }) => {
       if (!peerId) return;
       if (incomingRoomId && incomingRoomId !== roomId) return;
-      if (!micEnabledRef.current || !localVoiceStreamRef.current) return;
       ensureVoicePeer(peerId);
       if (shouldInitiateWith(peerId)) {
         createVoiceOffer(peerId);
@@ -753,12 +791,10 @@ function Mesa({
 
     const onVoiceSignal = ({ roomId: incomingRoomId, fromId, description, candidate }) => {
       if (incomingRoomId && incomingRoomId !== roomId) return;
-      if (!micEnabledRef.current || !localVoiceStreamRef.current) return;
       handleVoiceSignal({ fromId, description, candidate });
     };
 
     const onVoiceSocketReconnect = () => {
-      if (!micEnabledRef.current || !localVoiceStreamRef.current) return;
       socket.emit("voice:join", { roomId });
     };
 
@@ -767,6 +803,7 @@ function Mesa({
     socket.on("voice:peer-left", onVoicePeerLeft);
     socket.on("voice:signal", onVoiceSignal);
     socket.on("connect", onVoiceSocketReconnect);
+    socket.emit("voice:join", { roomId });
 
     return () => {
       socket.off("voice:peers", onVoicePeers);
