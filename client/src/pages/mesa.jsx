@@ -188,6 +188,8 @@ function Mesa({
   const voiceRemoteAudioByPeerRef = useRef(new Map());
   const voiceMeterCleanupByKeyRef = useRef(new Map());
   const voiceAudioContextRef = useRef(null);
+  const responderAlertAudioCtxRef = useRef(null);
+  const lastResponderAlertKeyRef = useRef("");
 
   const clampFloatingClockPos = (x, y) => {
     if (typeof window === "undefined") return { x, y };
@@ -619,6 +621,55 @@ function Mesa({
     return pc;
   };
 
+  const ensureResponderAlertAudioContext = async () => {
+    if (typeof window === "undefined") return null;
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    if (!responderAlertAudioCtxRef.current) {
+      responderAlertAudioCtxRef.current = new Ctx();
+    }
+    const ctx = responderAlertAudioCtxRef.current;
+    if (ctx?.state === "suspended") {
+      try {
+        await ctx.resume();
+      } catch {
+        // ignore autoplay-policy resume errors
+      }
+    }
+    return ctx;
+  };
+
+  const playResponderTurnDing = async () => {
+    const ctx = await ensureResponderAlertAudioContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      const master = ctx.createGain();
+      master.gain.setValueAtTime(0.0001, now);
+      master.connect(ctx.destination);
+
+      const scheduleTone = (startAt, frequency, duration) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "triangle";
+        osc.frequency.setValueAtTime(frequency, startAt);
+        gain.gain.setValueAtTime(0.0001, startAt);
+        gain.gain.exponentialRampToValueAtTime(0.18, startAt + 0.012);
+        gain.gain.exponentialRampToValueAtTime(0.0001, startAt + duration);
+        osc.connect(gain);
+        gain.connect(master);
+        osc.start(startAt);
+        osc.stop(startAt + duration + 0.02);
+      };
+
+      scheduleTone(now, 1046, 0.16);
+      scheduleTone(now + 0.18, 1396, 0.24);
+      master.gain.exponentialRampToValueAtTime(0.0001, now + 0.55);
+    } catch {
+      // ignore audio synthesis errors
+    }
+  };
+
   const createVoiceOffer = async (peerId) => {
     try {
       const pc = ensureVoicePeer(peerId);
@@ -817,6 +868,15 @@ function Mesa({
   useEffect(() => {
     return () => {
       stopVoiceSession("unmount", true);
+    };
+  }, []);
+  useEffect(() => {
+    return () => {
+      const ctx = responderAlertAudioCtxRef.current;
+      responderAlertAudioCtxRef.current = null;
+      if (ctx && typeof ctx.close === "function") {
+        ctx.close().catch(() => {});
+      }
     };
   }, []);
   const allowedTestEmails = new Set([
@@ -1234,6 +1294,35 @@ function Mesa({
     !isFlorPending &&
     !isCanto11Active &&
     (!nextCall.requiresAcceptedBy || acceptedByMyTeam);
+
+  useEffect(() => {
+    if (!roomId || !myPlayerId) return;
+    if (!isPendingResponder) {
+      lastResponderAlertKeyRef.current = "";
+      return;
+    }
+    const alertKey = `${roomId}:${pendingCallType || "pending"}:${state.turn || ""}:${
+      Number(state.stateVersion || 0)
+    }`;
+    if (lastResponderAlertKeyRef.current === alertKey) return;
+    lastResponderAlertKeyRef.current = alertKey;
+
+    if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
+      try {
+        navigator.vibrate([110, 70, 140]);
+      } catch {
+        // ignore unsupported/blocked vibration calls
+      }
+    }
+    void playResponderTurnDing();
+  }, [
+    isPendingResponder,
+    myPlayerId,
+    pendingCallType,
+    roomId,
+    state.stateVersion,
+    state.turn,
+  ]);
   const me = state.players.find((p) => p.id === myPlayerId);
   const getPlayerAvatarUrl = (player) => {
     const raw = player?.avatarUrl;
