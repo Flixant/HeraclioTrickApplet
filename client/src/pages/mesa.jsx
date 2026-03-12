@@ -3,7 +3,7 @@ import { socket } from "../socket";
 import { getDeckCard, preloadDeckAssets, renderBackCard, renderCard } from "./deck";
 import { resolveMyPlayerId } from "../utils/playerIdentity";
 import { db, isFirebaseConfigured } from "../firebase";
-import { doc, getDoc } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, limit, query, where } from "firebase/firestore";
 import HistoryPanel from "../components/HistoryPanel";
 import FloatingClockButton from "../components/FloatingClockButton";
 import TableStatusPanels from "../components/TableStatusPanels";
@@ -538,22 +538,48 @@ function Mesa({
       const isMe = selectedPlayerForModal.id === myPlayerId;
       const firebaseUid =
         (isMe ? myProfile?.uid : selectedPlayerForModal.playerUid || selectedPlayerForModal.uid) || null;
+      const profileId =
+        selectedPlayerForModal.profileId || (isMe ? myProfile?.profileId : null) || null;
 
       if (!isFirebaseConfigured || !db || !firebaseUid) {
-        setSelectedPlayerStats(null);
-        setSelectedPlayerStatsLoading(false);
-        return;
+        if (!profileId) {
+          setSelectedPlayerStats(null);
+          setSelectedPlayerStatsLoading(false);
+          return;
+        }
       }
 
       setSelectedPlayerStatsLoading(true);
       try {
-        const snapshot = await getDoc(doc(db, "players", firebaseUid));
-        if (cancelled) return;
-        if (!snapshot.exists()) {
+        let data = null;
+
+        if (firebaseUid) {
+          const snapshot = await getDoc(doc(db, "players", firebaseUid));
+          if (cancelled) return;
+          if (snapshot.exists()) {
+            data = snapshot.data() || {};
+          }
+        }
+
+        // Fallback for older room sessions where playerUid is missing.
+        if (!data && profileId) {
+          const q = query(
+            collection(db, "players"),
+            where("profileId", "==", profileId),
+            limit(1)
+          );
+          const snap = await getDocs(q);
+          if (cancelled) return;
+          if (!snap.empty) {
+            data = snap.docs[0].data() || {};
+          }
+        }
+
+        if (!data) {
           setSelectedPlayerStats(null);
           return;
         }
-        const data = snapshot.data() || {};
+
         setSelectedPlayerStats({
           wins: Number(data.wins || 0),
           losses: Number(data.losses || 0),
