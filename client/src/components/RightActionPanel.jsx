@@ -88,6 +88,8 @@ export default function RightActionPanel({
     canCallEnvidoForCard,
     canCallFlor,
     onCallEnvido,
+    micEnabled,
+    onToggleMic,
     turnTimerPlayerId,
     turnTimerRemainingMs,
     turnTimerDurationMs,
@@ -334,6 +336,8 @@ export default function RightActionPanel({
         canCallEnvido={canCallEnvidoForCard}
         canCallFlor={canCallFlor}
         onCallEnvido={onCallEnvido}
+        micEnabled={micEnabled}
+        onToggleMic={onToggleMic}
         turnTimerPlayerId={turnTimerPlayerId}
         turnTimerRemainingMs={turnTimerRemainingMs}
         turnTimerDurationMs={turnTimerDurationMs}

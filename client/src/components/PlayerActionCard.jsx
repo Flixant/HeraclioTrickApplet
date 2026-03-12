@@ -26,6 +26,8 @@ function PlayerActionCard({
   canCallEnvido,
   canCallFlor,
   onCallEnvido,
+  micEnabled,
+  onToggleMic,
   turnTimerPlayerId,
   turnTimerRemainingMs,
   turnTimerDurationMs,
@@ -87,6 +89,34 @@ function PlayerActionCard({
           <div className="truncate text-sm font-semibold leading-tight">{playerName || "Jugador"}</div>
           <div className="truncate text-xs text-slate-500 sm:text-[11px]">ID: {roomId}</div>
         </div>
+        <button
+          type="button"
+          onClick={onToggleMic}
+          className={`shrink-0 h-8 w-8 rounded-full border p-0 text-[10px] font-semibold transition flex items-center justify-center ${
+            micEnabled
+              ? "border-blue-300/60 bg-blue-500 text-white shadow-sm hover:bg-blue-400"
+              : "border-slate-300 bg-slate-200 text-slate-600 hover:bg-slate-300"
+          }`}
+          title="Dummy: activar o desactivar microfono"
+          aria-label={micEnabled ? "Microfono activado" : "Microfono desactivado"}
+        >
+          {micEnabled ? (
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="9" y="2.5" width="6" height="11" rx="3" />
+              <path d="M5.5 10.5a6.5 6.5 0 0 0 13 0" />
+              <path d="M12 17v4" />
+              <path d="M8.5 21h7" />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="3" y1="3" x2="21" y2="21" />
+              <path d="M9 9.2V5.5a3 3 0 1 1 6 0v7a2.9 2.9 0 0 1-.2 1.1" />
+              <path d="M5.5 10.5a6.5 6.5 0 0 0 10.9 4.7" />
+              <path d="M12 17v4" />
+              <path d="M8.5 21h7" />
+            </svg>
+          )}
+        </button>
       </div>
 
       <div className="flex gap-2.5 sm:gap-2">

@@ -115,6 +115,7 @@ function Mesa({
   const [suppressMessagesForMatchEnd, setSuppressMessagesForMatchEnd] = useState(false);
   const [showHistoryPanel, setShowHistoryPanel] = useState(false);
   const [messageHistory, setMessageHistory] = useState([]);
+  const [micEnabled, setMicEnabled] = useState(false);
   const [selectedPlayerForModal, setSelectedPlayerForModal] = useState(null);
   const [selectedPlayerStats, setSelectedPlayerStats] = useState(null);
   const [selectedPlayerStatsLoading, setSelectedPlayerStatsLoading] = useState(false);
@@ -1652,6 +1653,8 @@ function Mesa({
     canCallEnvidoForCard: canCallEnvido,
     canCallFlor,
     onCallEnvido: () => callEnvido(),
+    micEnabled,
+    onToggleMic: () => setMicEnabled((prev) => !prev),
     turnTimerPlayerId: activeTurnTimerPlayerId,
     turnTimerRemainingMs: activeTurnTimerRemainingMs,
     turnTimerDurationMs: activeTurnTimerDurationMs,
@@ -2000,10 +2003,10 @@ function Mesa({
           {currentMessage && (
             <div className="pointer-events-none absolute left-1/2 top-1/2 z-[110] w-[min(92vw,560px)] -translate-x-1/2 -translate-y-1/2 px-4">
               <div
-                className="text-center text-xl font-extrabold tracking-wide text-amber-400 [animation:mesaMessageFloat_1.6s_ease-in-out_forwards]"
+                className="text-center text-xl font-semibold tracking-[0.02em] text-[#0b1f3a] [animation:mesaMessageFloat_1.6s_ease-in-out_forwards]"
                 style={{
                   textShadow:
-                    "0 1px 0 rgba(0,0,0,0.55), 0 0 6px rgba(0,0,0,0.28), 0 0 12px rgba(0,0,0,0.2)",
+                    "0 1px 2px rgba(0,0,0,0.35), 0 2px 6px rgba(0,0,0,0.2)",
                 }}
               >
                 {currentMessage}
