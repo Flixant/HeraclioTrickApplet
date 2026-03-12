@@ -3162,39 +3162,51 @@ function chooseBotCardIndex(gameState, botId, hand) {
   const lowest = ranked[0]?.index ?? 0;
   const highest = ranked[ranked.length - 1]?.index ?? 0;
   const medium = ranked[Math.floor(ranked.length / 2)]?.index ?? lowest;
-    const passedCard = ranked.find((item) => item.rank === 0)?.index;
+  const passedCard = ranked.find((item) => item.rank === 0)?.index;
 
-    const winning = getCurrentWinningInfo(gameState);
-    if ((gameState.currentHandCards || []).length) {
-      const remainingOpponents = getRemainingOpponentsInThisHand(gameState, botId);
-      const hasOpponentsAfterMe = remainingOpponents.length > 0;
+  const winning = getCurrentWinningInfo(gameState);
+  const round = getBotRoundContext(gameState, botId);
 
-      if (winning.winnerId && isSameTeam(gameState, botId, winning.winnerId)) {
-        return typeof passedCard === "number" ? passedCard : lowest;
-      }
+  if ((gameState.currentHandCards || []).length) {
+    const remainingOpponents = getRemainingOpponentsInThisHand(gameState, botId);
+    const hasOpponentsAfterMe = remainingOpponents.length > 0;
+    const teamAlreadyWinning = !!winning.winnerId && isSameTeam(gameState, botId, winning.winnerId);
+    const beaterCards = ranked.filter((item) => item.rank > winning.bestRank);
+    const lowestBeater = beaterCards[0] || null;
+    const highestBeater = beaterCards[beaterCards.length - 1] || null;
 
-      const beatCard = ranked.find((item) => item.rank > winning.bestRank);
-      if (!beatCard) return typeof passedCard === "number" ? passedCard : lowest;
-
-      // In critical moments prefer securing the hand with the strongest beating card.
-      const roundNow = getBotRoundContext(gameState, botId);
-      if (roundNow.mustWinNow) return beatCard.index;
-
-      // If an opponent still acts after the bot, avoid overcommitting unless needed.
-      if (hasOpponentsAfterMe) {
-        const saferBeat = ranked.find((item) => item.rank > winning.bestRank && item.rank <= beatCard.rank + 2);
-        return (saferBeat || beatCard).index;
-      }
-      return beatCard.index;
+    // If partner is already winning, don't waste power cards.
+    if (teamAlreadyWinning) {
+      return typeof passedCard === "number" ? passedCard : lowest;
     }
 
-    const round = getBotRoundContext(gameState, botId);
-    if (round.mustWinNow) return highest;
-    if (round.handNumber >= 2 && round.behind) return highest;
-    if (round.ahead) return typeof passedCard === "number" ? passedCard : lowest;
-    if (round.handNumber === 1 && ranked.length >= 3) return medium;
-    if (round.roundPointValue >= 6) return medium;
-    return lowest;
+    // Can't win this hand anymore: discard the cheapest card.
+    if (!lowestBeater) {
+      return typeof passedCard === "number" ? passedCard : lowest;
+    }
+
+    // Critical rounds: secure with highest beater.
+    if (round.mustWinNow || (round.roundPointValue >= 6 && round.handNumber >= 2)) {
+      return highestBeater?.index ?? lowestBeater.index;
+    }
+
+    // If opponents still play after us, keep margin without burning the top card.
+    if (hasOpponentsAfterMe && beaterCards.length > 1) {
+      const saferBeater = beaterCards[Math.max(0, Math.floor(beaterCards.length / 2) - 1)];
+      return saferBeater?.index ?? lowestBeater.index;
+    }
+
+    // If no opponents after us, lowest beater is enough to close the hand.
+    return lowestBeater.index;
+  }
+
+  // Leading the hand.
+  if (round.mustWinNow) return highest;
+  if (round.roundPointValue >= 6) return highest;
+  if (round.handNumber >= 2 && round.behind) return highest;
+  if (round.ahead) return typeof passedCard === "number" ? passedCard : lowest;
+  if (round.handNumber === 1 && ranked.length >= 3) return medium;
+  return lowest;
 }
 
   function processBotRoom(room) {
