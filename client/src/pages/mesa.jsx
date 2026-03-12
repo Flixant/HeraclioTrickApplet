@@ -1452,7 +1452,7 @@ function Mesa({
               disabled={isDisabled}
               className={`absolute pointer-events-auto transition ${
                 isDisabled
-                  ? "cursor-not-allowed opacity-60 saturate-75"
+                  ? "cursor-not-allowed opacity-95 saturate-75"
                   : "cursor-pointer hover:-translate-y-2"
               }`}
               style={{ ...commonStyle, bottom: `${arcPx}px` }}
