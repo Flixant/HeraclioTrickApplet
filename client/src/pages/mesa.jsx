@@ -498,7 +498,7 @@ function Mesa({
       cleanup();
       voiceMeterCleanupByKeyRef.current.delete(key);
     }
-    setSpeakingByPlayer((prev) => {
+    setVoiceSpeakingByPlayer((prev) => {
       if (!Object.prototype.hasOwnProperty.call(prev, key)) return prev;
       const next = { ...prev };
       delete next[key];
@@ -528,7 +528,7 @@ function Mesa({
         const nextActive = avg > 7.5;
         if (nextActive !== active) {
           active = nextActive;
-          setSpeakingByPlayer((prev) => {
+          setVoiceSpeakingByPlayer((prev) => {
             if (prev[key] === nextActive) return prev;
             return { ...prev, [key]: nextActive };
           });
@@ -1285,7 +1285,7 @@ function Mesa({
     const playerId = player?.id || fallback;
     const avatar = getPlayerAvatarUrl(player);
     const failed = !!remoteAvatarLoadFailed[playerId];
-    const isSpeaking = !!speakingByPlayer[playerId];
+    const isSpeaking = !!voiceSpeakingByPlayer[playerId];
     const showTurnCountdownRing =
       !!player?.id &&
       player.id === activeTurnTimerPlayerId &&
@@ -2054,7 +2054,7 @@ function Mesa({
     onCallEnvido: () => callEnvido(),
     micEnabled,
     onToggleMic: toggleVoiceMic,
-    isSpeaking: !!speakingByPlayer[myPlayerId],
+    isSpeaking: !!voiceSpeakingByPlayer[myPlayerId],
     turnTimerPlayerId: activeTurnTimerPlayerId,
     turnTimerRemainingMs: activeTurnTimerRemainingMs,
     turnTimerDurationMs: activeTurnTimerDurationMs,
