@@ -3,6 +3,7 @@ import { socket } from "./socket";
 import Mesa from "./pages/mesa";
 import LoginPage from "./pages/LoginPage";
 import RoomListPage from "./pages/RoomListPage";
+import RoomWaitingPage from "./pages/RoomWaitingPage";
 import { auth, db, googleProvider, isFirebaseConfigured } from "./firebase";
 import { onAuthStateChanged, signInWithPopup, signInWithRedirect, signOut } from "firebase/auth";
 import { doc, getDoc, runTransaction, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
@@ -97,6 +98,14 @@ function buildMatchFingerprint(roomId, gameState) {
     `t2:${Number(score.team2) || 0}`,
     pointsPart,
   ].join("::");
+}
+
+function shouldUseStartCountdown(nextGameState) {
+  return (
+    !nextGameState?.matchEnded &&
+    Number(nextGameState?.handNumber || 1) === 1 &&
+    Number(nextGameState?.tableCards?.length || 0) === 0
+  );
 }
 
 function setUrlForRoom(roomId) {
@@ -204,6 +213,7 @@ function App() {
   const [connected, setConnected] = useState(false);
   const [rooms, setRooms] = useState([]);
   const [gameState, setGameState] = useState(null);
+  const [pendingGameStart, setPendingGameStart] = useState(null);
   const [roomId, setRoomId] = useState(() => getRoomIdFromPathname() || null);
   const [reconnectToken] = useState(() => getOrCreateReconnectToken());
   const [authUser, setAuthUser] = useState(null);
@@ -233,10 +243,12 @@ function App() {
   const pendingMatchUpdateRef = useRef(new Set());
   const myPlayerIdRef = useRef(null);
   const suppressAutoJoinUntilRef = useRef(0);
+  const countdownConsumedUntilRef = useRef(new Map());
 
   const currentProfile = profile || guestProfile;
   const isGuestMode = !!guestProfile;
   const effectivePlayerName = (currentProfile?.displayName || authUser?.displayName || "").trim();
+  const currentRoom = roomId ? rooms.find((room) => room?.id === roomId) || null : null;
   const avatarUrlRaw = profile?.photoURL || getUserPhotoURL(authUser) || "";
   const avatarUrl =
     typeof avatarUrlRaw === "string" && /^https?:\/\//i.test(avatarUrlRaw.trim())
@@ -322,6 +334,38 @@ function App() {
   }, [guestProfile, reconnectToken]);
 
   useEffect(() => {
+    if (!pendingGameStart?.roomId) return undefined;
+    if (!pendingGameStart.showCountdown) return undefined;
+    if (Number(pendingGameStart.countdown || 0) <= 0) {
+      countdownConsumedUntilRef.current.set(pendingGameStart.roomId, Date.now() + 20000);
+      setGameState(pendingGameStart.gameState || null);
+      setPendingGameStart(null);
+      return undefined;
+    }
+    const timer = setTimeout(() => {
+      setPendingGameStart((prev) => {
+        if (!prev || prev.roomId !== pendingGameStart.roomId) return prev;
+        return {
+          ...prev,
+          countdown: Math.max(0, Number(prev.countdown || 0) - 1),
+        };
+      });
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [pendingGameStart]);
+
+  useEffect(() => {
+    if (!pendingGameStart?.roomId || pendingGameStart.showCountdown) return undefined;
+    const timer = setTimeout(() => {
+      setPendingGameStart((prev) => {
+        if (!prev || prev.showCountdown) return prev;
+        return { ...prev, showCountdown: true };
+      });
+    }, 2200);
+    return () => clearTimeout(timer);
+  }, [pendingGameStart]);
+
+  useEffect(() => {
     function onConnect() {
       setConnected(true);
       socket.emit("rooms:list");
@@ -350,8 +394,30 @@ function App() {
     }
 
     function onGameStart({ roomId: nextRoomId, gameState: nextGameState }) {
+      const shouldUseCountdown = shouldUseStartCountdown(nextGameState);
+      const countdownAlreadyConsumed =
+        Number(countdownConsumedUntilRef.current.get(nextRoomId) || 0) > Date.now();
       setRoomId(nextRoomId);
-      setGameState(nextGameState);
+      if (shouldUseCountdown && !countdownAlreadyConsumed) {
+        setGameState(null);
+        setPendingGameStart((prev) => {
+          if (prev?.roomId === nextRoomId) {
+            return {
+              ...prev,
+              gameState: nextGameState,
+            };
+          }
+          return {
+            roomId: nextRoomId,
+            gameState: nextGameState,
+            countdown: 5,
+            showCountdown: false,
+          };
+        });
+      } else {
+        setPendingGameStart(null);
+        setGameState(nextGameState);
+      }
       writeStoredSession({
         ...readStoredSession(),
         isGuest: isGuestMode,
@@ -367,6 +433,46 @@ function App() {
       const nextState = payload?.gameState || payload;
       if (!nextState) return;
       if (payloadRoomId && (!roomId || payloadRoomId !== roomId)) return;
+      const targetRoomId = payloadRoomId || roomId || null;
+      const shouldUseCountdown = shouldUseStartCountdown(nextState);
+      const hasPendingForRoom =
+        !!pendingGameStart?.roomId &&
+        (!!payloadRoomId ? pendingGameStart.roomId === payloadRoomId : pendingGameStart.roomId === roomId);
+      const countdownAlreadyConsumed =
+        !!targetRoomId &&
+        Number(countdownConsumedUntilRef.current.get(targetRoomId) || 0) > Date.now();
+
+      if ((shouldUseCountdown && !countdownAlreadyConsumed) || hasPendingForRoom) {
+        if (payloadRoomId && roomId !== payloadRoomId) {
+          setRoomId(payloadRoomId);
+        }
+        setPendingGameStart((prev) => {
+          const effectiveRoomId = payloadRoomId || prev?.roomId || roomId || null;
+          if (!effectiveRoomId) return prev;
+          if (!prev || prev.roomId !== effectiveRoomId) {
+            return {
+              roomId: effectiveRoomId,
+              gameState: nextState,
+              countdown: 5,
+              showCountdown: false,
+            };
+          }
+          const prevVersion = Number(prev.gameState?.stateVersion) || 0;
+          const nextVersion = Number(nextState?.stateVersion) || 0;
+          if (nextVersion && prevVersion && nextVersion < prevVersion) return prev;
+          return { ...prev, gameState: nextState };
+        });
+        setGameState(null);
+        return;
+      }
+
+      setPendingGameStart((prev) => {
+        if (!prev || !payloadRoomId || prev.roomId !== payloadRoomId) return prev;
+        const prevVersion = Number(prev.gameState?.stateVersion) || 0;
+        const nextVersion = Number(nextState?.stateVersion) || 0;
+        if (nextVersion && prevVersion && nextVersion < prevVersion) return prev;
+        return { ...prev, gameState: nextState };
+      });
       setGameState((prev) => {
         const prevVersion = Number(prev?.stateVersion) || 0;
         const nextVersion = Number(nextState?.stateVersion) || 0;
@@ -377,6 +483,7 @@ function App() {
 
     function onReturnRoomList() {
       suppressAutoJoinUntilRef.current = Date.now() + 4000;
+      setPendingGameStart(null);
       setGameState(null);
       setRoomId(null);
       window.history.replaceState({}, "", "/");
@@ -406,7 +513,7 @@ function App() {
       socket.off("game:update", onGameUpdate);
       socket.off("match:return-roomlist", onReturnRoomList);
     };
-  }, [avatarUrl, currentProfile?.profileId, currentProfile?.uid, effectivePlayerName, isGuestMode, reconnectToken, roomId]);
+  }, [avatarUrl, currentProfile?.profileId, currentProfile?.uid, effectivePlayerName, isGuestMode, pendingGameStart, reconnectToken, roomId]);
 
   useEffect(() => {
     attemptJoinByUrl(effectivePlayerName, avatarUrl);
@@ -563,20 +670,29 @@ function App() {
     socket.emit("room:away", { roomId: nextRoomId, away: false });
   };
 
-  const leaveToRoomList = () => {
+  const leaveToRoomList = ({ forceUnsubscribe = false } = {}) => {
     suppressAutoJoinUntilRef.current = Date.now() + 4000;
     autoJoinAttemptRef.current = "";
     window.history.replaceState({}, "", "/");
     const previousRoomId = roomId;
     const leavingAfterMatchEnd = !!gameState?.matchEnded;
+    const waitingCountdownActive =
+      pendingGameStart?.roomId === previousRoomId && Number(pendingGameStart?.countdown || 0) > 0;
+    const shouldUnsubscribeSeat =
+      forceUnsubscribe || !gameState || leavingAfterMatchEnd || waitingCountdownActive;
+    const keepRoomForReconnect = !!gameState && !leavingAfterMatchEnd && !shouldUnsubscribeSeat;
     if (previousRoomId) {
-      if (leavingAfterMatchEnd) {
+      if (shouldUnsubscribeSeat) {
         socket.emit("room:leave");
       } else {
         socket.emit("room:away", { roomId: previousRoomId, away: true });
       }
     }
+    setPendingGameStart(null);
     setGameState(null);
+    if (previousRoomId) {
+      countdownConsumedUntilRef.current.delete(previousRoomId);
+    }
     setRoomId(null);
     writeStoredSession({
       ...readStoredSession(),
@@ -584,7 +700,7 @@ function App() {
       playerName: effectivePlayerName,
       profileId: currentProfile?.profileId || readStoredSession().profileId || null,
       reconnectToken,
-      roomId: leavingAfterMatchEnd ? null : previousRoomId || null,
+      roomId: keepRoomForReconnect ? previousRoomId || null : null,
     });
     socket.emit("rooms:list");
   };
@@ -646,7 +762,11 @@ function App() {
       setGuestProfile(null);
       setProfile(null);
       setAuthUser(null);
+      setPendingGameStart(null);
       setGameState(null);
+      if (roomId) {
+        countdownConsumedUntilRef.current.delete(roomId);
+      }
       setRoomId(null);
       socket.emit("room:leave");
       socket.emit("rooms:list");
@@ -662,7 +782,11 @@ function App() {
     if (!auth) return;
     try {
       await signOut(auth);
+      setPendingGameStart(null);
       setGameState(null);
+      if (roomId) {
+        countdownConsumedUntilRef.current.delete(roomId);
+      }
       setRoomId(null);
       writeStoredSession({
         ...readStoredSession(),
@@ -692,6 +816,41 @@ function App() {
         isFirebaseConfigured={isFirebaseConfigured}
         onSignInWithGoogle={signInWithGoogle}
         onStartAnonymousSession={startAnonymousSession}
+      />
+    );
+  }
+
+  const hasActiveCountdown =
+    pendingGameStart?.roomId === roomId &&
+    !!pendingGameStart?.showCountdown &&
+    Number(pendingGameStart?.countdown || 0) > 0;
+
+  if (roomId && (hasActiveCountdown || !gameState)) {
+    const fallbackMaxPlayers =
+      pendingGameStart?.gameState?.mode === "2vs2"
+        ? 4
+        : pendingGameStart?.gameState?.mode === "1vs1"
+          ? 2
+          : 0;
+    const waitingRoom = currentRoom || {
+      id: roomId,
+      mode: pendingGameStart?.gameState?.mode || "-",
+      maxPlayers: fallbackMaxPlayers,
+      players: Array.isArray(pendingGameStart?.gameState?.players)
+        ? pendingGameStart.gameState.players
+        : [],
+    };
+    return (
+      <RoomWaitingPage
+        connected={connected}
+        roomId={roomId}
+        room={waitingRoom}
+        effectivePlayerName={effectivePlayerName}
+        currentProfile={currentProfile}
+        reconnectToken={reconnectToken}
+        socketId={socket.id}
+        countdown={hasActiveCountdown ? pendingGameStart?.countdown : null}
+        onLeave={() => leaveToRoomList({ forceUnsubscribe: true })}
       />
     );
   }

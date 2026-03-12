@@ -159,19 +159,19 @@ export default function RoomListPage({
                       return (
                         <div
                           key={match?.id || `${match?.roomId || "room"}-${index}`}
-                          className={`inline-flex items-center gap-1 rounded-md px-1.5 py-1 font-semibold ${
+                          className={`flex text-md items-center align-middle rounded-sm w-6 h-6 justify-center font-semibold ${
                             isWin
-                              ? "bg-emerald-500/20 text-emerald-300"
-                              : "bg-red-500/20 text-red-300"
+                              ? "bg-emerald-500/40 text-emerald-300"
+                              : "bg-red-500/40 text-red-300"
                           }`}
                         >
-                          <span
-                            className={`inline-flex min-w-5 items-center justify-center rounded px-1 py-0.5 text-[9px] font-bold ${
-                              isWin ? "bg-emerald-500/30 text-emerald-200" : "bg-red-500/30 text-red-200"
-                            }`}
-                          >
-                            {isWin ? "W" : "L"}
-                          </span>
+                         <span className={`flex text-md items-center rounded-sm w-5 h-5 justify-center font-semibold ${
+                            isWin
+                              ? "bg-emerald-500/40 text-emerald-300"
+                              : "bg-red-500/40 text-red-300"
+                          }`}>{isWin ? "W" : "L"}</span>
+                            
+                       
                         </div>
                       );
                     })}
