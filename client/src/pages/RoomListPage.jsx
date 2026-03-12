@@ -4,7 +4,6 @@ import logo from "../assets/logo.png";
 export default function RoomListPage({
   connected,
   rooms,
-  networkDebug,
   effectivePlayerName,
   currentProfile,
   avatarUrl,
@@ -15,7 +14,6 @@ export default function RoomListPage({
   socketId,
   onJoinRoom,
   onLogout,
-  onResetLocalSession,
 }) {
   const [show1v1Rooms, setShow1v1Rooms] = useState(true);
   const [show2v2Rooms, setShow2v2Rooms] = useState(true);
@@ -215,9 +213,6 @@ export default function RoomListPage({
               {isGuestMode ? "Salir invitado" : "Cerrar sesion"}
             </button>
           </div>
-          <div className="mt-2 rounded-md border border-amber-300/20 bg-black/30 px-2 py-1 text-[10px] text-amber-100/90">
-            {networkDebug || "socket: sin diagnostico"}
-          </div>
         </header>
 
         <section className="space-y-5">
@@ -294,15 +289,6 @@ export default function RoomListPage({
           Gestiona tus partidas de Truco Venezolano
         </p>
 
-        <div className="mt-2 flex justify-center gap-2 pb-4">
-          <button
-            type="button"
-            onClick={onResetLocalSession}
-            className="rounded-full border border-emerald-300/25 bg-emerald-900/45 px-4 py-1.5 text-xs font-semibold text-emerald-100 transition hover:bg-emerald-800/55"
-          >
-            Reset sesion local (debug)
-          </button>
-        </div>
       </div>
     </div>
   );
