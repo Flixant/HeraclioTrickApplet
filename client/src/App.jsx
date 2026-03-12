@@ -433,7 +433,7 @@ function App() {
           return {
             roomId: nextRoomId,
             gameState: nextGameState,
-            countdown: 5,
+            countdown: 3,
             showCountdown: false,
           };
         });
@@ -483,7 +483,7 @@ function App() {
             return {
               roomId: effectiveRoomId,
               gameState: nextState,
-              countdown: 5,
+              countdown: 3,
               showCountdown: false,
             };
           }
