@@ -432,8 +432,13 @@ function App() {
     function onGameStart({ roomId: nextRoomId, gameState: nextGameState }) {
       const activeRoomId = liveRoomIdRef.current;
       const activeGameState = liveGameStateRef.current;
+      const isRematchRestartThisRoom =
+        activeRoomId === nextRoomId &&
+        !!activeGameState?.matchEnded &&
+        !nextGameState?.matchEnded;
       const alreadyPlayingThisRoom =
-        activeRoomId === nextRoomId && !!activeGameState && !activeGameState.matchEnded;
+        isRematchRestartThisRoom ||
+        (activeRoomId === nextRoomId && !!activeGameState && !activeGameState.matchEnded);
       const shouldUseCountdown = shouldUseStartCountdown(nextGameState);
       const countdownAlreadyConsumed =
         Number(countdownConsumedUntilRef.current.get(nextRoomId) || 0) > Date.now();
@@ -482,6 +487,11 @@ function App() {
       if (payloadRoomId && (!activeRoomId || payloadRoomId !== activeRoomId)) return;
       const targetRoomId = payloadRoomId || activeRoomId || null;
       const shouldUseCountdown = shouldUseStartCountdown(nextState);
+      const isRematchRestartThisRoom =
+        !!activeGameState?.matchEnded &&
+        !nextState?.matchEnded &&
+        !!activeRoomId &&
+        (!payloadRoomId || payloadRoomId === activeRoomId);
       const hasPendingForRoom =
         !!activePendingStart?.roomId &&
         (!!payloadRoomId ? activePendingStart.roomId === payloadRoomId : activePendingStart.roomId === activeRoomId);
@@ -491,6 +501,7 @@ function App() {
       const skipCountdownOnRejoin =
         !!targetRoomId && skipCountdownOnRejoinRoomRef.current === targetRoomId;
       const alreadyPlayingThisRoom =
+        isRematchRestartThisRoom ||
         !!activeGameState &&
         !activeGameState.matchEnded &&
         (!payloadRoomId || payloadRoomId === activeRoomId);

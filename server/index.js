@@ -1803,6 +1803,9 @@ io.on("connection", (socket) => {
     const responder = gameState.players.find((player) => player.id === responderId);
     if (!responder) return;
 
+    // Si canta Truco sin haber declarado su Flor disponible, la pierde.
+    burnFlorOnRespondWithoutConFlor(gameState, socket.id);
+
     gameState.truco = {
       status: "pending",
       callerId: socket.id,
