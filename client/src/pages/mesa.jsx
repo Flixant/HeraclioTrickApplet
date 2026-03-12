@@ -7,6 +7,7 @@ import { collection, doc, getDoc, getDocs, limit, query, where } from "firebase/
 import HistoryPanel from "../components/HistoryPanel";
 import FloatingClockButton from "../components/FloatingClockButton";
 import TableStatusPanels from "../components/TableStatusPanels";
+import TestControlsPanel from "../components/TestControlsPanel";
 import RightActionPanel from "../components/RightActionPanel";
 import logo from "../assets/logo.png";
 
@@ -136,6 +137,7 @@ function Mesa({
   const [showAdvancedCantos, setShowAdvancedCantos] = useState(false);
   const [showAdvancedJugadas, setShowAdvancedJugadas] = useState(false);
   const [showCommunicationCantos, setShowCommunicationCantos] = useState(false);
+  const [showTestPanel, setShowTestPanel] = useState(false);
   const [passCardArmed, setPassCardArmed] = useState(false);
   const [pardaDraft, setPardaDraft] = useState([]);
   const [showEnvidoStoneSlider, setShowEnvidoStoneSlider] = useState(false);
@@ -780,6 +782,13 @@ function Mesa({
       stopVoiceSession("unmount", true);
     };
   }, []);
+  const allowedTestEmails = new Set([
+    "frantoima@gmail.com",
+    "fantomcdolibre1@gmail.com",
+    "fantochtron@gmail.com",
+    "antoimahome@gmail.com",
+  ]);
+  const isTestUser = allowedTestEmails.has(String(myEmail || "").trim().toLowerCase());
   const isTwoVsTwo = state.mode === "2vs2" && state.players.length === 4;
   const mySeatIndex = state.players.findIndex((p) => p.id === myPlayerId);
   const safeMySeat = mySeatIndex >= 0 ? mySeatIndex : 0;
@@ -1318,6 +1327,11 @@ function Mesa({
   }));
   const everyoneAnsweredRematch =
     rematchVotes.length > 0 && rematchVotes.every((v) => v.decision === "replay" || v.decision === "exit");
+  const isBastosEspadasMode =
+    Array.isArray(state.deckConfig?.allowedSuits) &&
+    state.deckConfig.allowedSuits.length === 2 &&
+    state.deckConfig.allowedSuits.includes("bastos") &&
+    state.deckConfig.allowedSuits.includes("espadas");
   const viraPositionClassByOffset = isTwoVsTwo
     ? {
         0: "left-4 bottom-4 sm:left-6 sm:bottom-6", // Sur: izquierda del local
@@ -1392,6 +1406,39 @@ function Mesa({
 
   const callCanto11NoPrivo = () => {
     socket.emit("canto11:no-privo", { roomId });
+  };
+
+  const toggleTestDeckMode = () => {
+    socket.emit("debug:set-deck-mode", {
+      roomId,
+      onlyBastosEspadas: !isBastosEspadasMode,
+    });
+  };
+
+  const redealTestRound = () => {
+    socket.emit("debug:redeal-round", { roomId });
+  };
+
+  const forceTestFlor = () => {
+    socket.emit("debug:force-flor", { roomId });
+  };
+
+  const forceTestFlorReservada = () => {
+    socket.emit("debug:force-flor-reservada", { roomId });
+  };
+
+  const setMyScore11 = () => {
+    socket.emit("debug:set-my-score-11", { roomId });
+  };
+
+  const setMyTeamScore11 = () => {
+    socket.emit("debug:set-my-team-score-11", { roomId });
+  };
+  const forceTestPardaFirst = () => {
+    socket.emit("debug:force-parda-first", { roomId });
+  };
+  const forceTestPardaTiebreak2 = () => {
+    socket.emit("debug:force-parda-tiebreak2", { roomId });
   };
 
   const acceptPendingCall = () => {
@@ -2289,6 +2336,21 @@ function Mesa({
         onPointerUp={onFloatingClockPointerUp}
         onClick={onFloatingClockClick}
       />
+      {isTestUser && (
+        <TestControlsPanel
+          isOpen={showTestPanel}
+          onToggleOpen={() => setShowTestPanel((prev) => !prev)}
+          isBastosEspadasMode={isBastosEspadasMode}
+          onToggleTestDeckMode={toggleTestDeckMode}
+          onRedealTestRound={redealTestRound}
+          onForceTestFlor={forceTestFlor}
+          onForceTestFlorReservada={forceTestFlorReservada}
+          onSetMyScore11={setMyScore11}
+          onSetMyTeamScore11={setMyTeamScore11}
+          onForceTestPardaFirst={forceTestPardaFirst}
+          onForceTestPardaTiebreak2={forceTestPardaTiebreak2}
+        />
+      )}
 
       <TableStatusPanels
         nsTeamNames={nsTeamNames}
