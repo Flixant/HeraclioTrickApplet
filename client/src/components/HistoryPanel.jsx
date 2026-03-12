@@ -82,7 +82,8 @@ function HistoryPanel({ open, entries, onClose }) {
               Aun no hay jugadas registradas.
             </div>
           ) : (
-            <div className="space-y-1.5">
+            <div className="relative space-y-1.5 pl-4">
+              <div className="pointer-events-none absolute bottom-0 left-[5px] top-0 w-px bg-emerald-700" />
               {entries.map((entry, index, arr) => {
                 const prev = arr[index - 1];
                 const startsGroup = !prev || prev.round !== entry.round || prev.hand !== entry.hand;
@@ -97,9 +98,8 @@ function HistoryPanel({ open, entries, onClose }) {
                         Ronda {entry.round} - Mano {entry.hand}
                       </div>
                     )}
-                    <div className="relative pl-4">
-                      <div className="absolute bottom-0 left-[5px] top-0 w-px bg-emerald-700" />
-                      <div className={`absolute left-0 top-2 h-[10px] w-[10px] rounded-full ${meta.dotClass}`} />
+                    <div className="relative">
+                      <div className={`absolute -left-4 top-2 h-[10px] w-[10px] rounded-full ${meta.dotClass}`} />
                       <div className={`rounded-md border px-2 py-1.5 text-xs text-emerald-50 ${meta.cardClass}`}>
                         <div className="flex items-start gap-1.5">
                           <span className="shrink-0 text-[10px] font-medium text-emerald-200">
