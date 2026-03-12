@@ -816,7 +816,14 @@ function Mesa({
     setSelectedPlayerForModal(player);
   };
   const selectedStatsData = selectedPlayerStats || { wins: 0, losses: 0, recentMatches: [] };
-  const selectedPlayerIsMe = !!selectedPlayerForModal?.id && selectedPlayerForModal.id === myPlayerId;
+  const selectedPlayerIsMe =
+    !!selectedPlayerForModal &&
+    (
+      (!!selectedPlayerForModal?.id && selectedPlayerForModal.id === myPlayerId) ||
+      (!!reconnectToken &&
+        !!selectedPlayerForModal?.reconnectToken &&
+        selectedPlayerForModal.reconnectToken === reconnectToken)
+    );
   const selectedWins = selectedPlayerIsMe
     ? Number(myProfile?.wins ?? selectedStatsData.wins ?? 0)
     : Number(selectedStatsData.wins || 0);
@@ -1579,6 +1586,9 @@ function Mesa({
     avatarUrl: safeAvatarUrl,
     avatarLoadFailed,
     onAvatarError: () => setAvatarLoadFailed(true),
+    onAvatarClick: () => {
+      if (me?.id) openPlayerProfileModal(me);
+    },
     playerName: me?.name || "Jugador",
     roomId,
     isCanto11Active,

@@ -28,6 +28,9 @@ export default function RoomListPage({
   const winPct = Math.round((Number(currentProfile?.wins || 0) / safeTotalMatches) * 100);
   const lossPct = 100 - winPct;
   const winDeg = Math.round((winPct / 100) * 360);
+  const recentMatches = Array.isArray(currentProfile?.recentMatches)
+    ? currentProfile.recentMatches.slice(0, 5)
+    : [];
 
   const renderRoomCard = (room) => {
     const isFull = room.players.length >= room.maxPlayers;
@@ -143,6 +146,39 @@ export default function RoomListPage({
                 <span className="rounded-md bg-emerald-900/55 px-2 py-1">
                   Fantasia: ${Number(currentProfile?.fantasyMoneyAccumulated || 0).toLocaleString("en-US")}
                 </span>
+              </div>
+
+              <div className="mt-2 rounded-md bg-emerald-900/45 px-2 py-1.5">
+                <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-200/80">
+                  Ultimos 5 juegos
+                </p>
+                {recentMatches.length ? (
+                  <div className="flex items-center gap-1 overflow-x-auto whitespace-nowrap text-[10px]">
+                    {recentMatches.map((match, index) => {
+                      const isWin = String(match?.result || "").toUpperCase() === "W";
+                      return (
+                        <div
+                          key={match?.id || `${match?.roomId || "room"}-${index}`}
+                          className={`inline-flex items-center gap-1 rounded-md px-1.5 py-1 font-semibold ${
+                            isWin
+                              ? "bg-emerald-500/20 text-emerald-300"
+                              : "bg-red-500/20 text-red-300"
+                          }`}
+                        >
+                          <span
+                            className={`inline-flex min-w-5 items-center justify-center rounded px-1 py-0.5 text-[9px] font-bold ${
+                              isWin ? "bg-emerald-500/30 text-emerald-200" : "bg-red-500/30 text-red-200"
+                            }`}
+                          >
+                            {isWin ? "W" : "L"}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-emerald-100/60">Aun no hay partidas registradas.</p>
+                )}
               </div>
             </div>
             <div className="flex flex-col items-center">

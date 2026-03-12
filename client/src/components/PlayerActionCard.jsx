@@ -2,6 +2,7 @@ function PlayerActionCard({
   avatarUrl,
   avatarLoadFailed,
   onAvatarError,
+  onAvatarClick,
   playerName,
   roomId,
   isCanto11Active,
@@ -63,7 +64,12 @@ function PlayerActionCard({
               />
             </svg>
           )}
-          <div className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-[#0d6b50] text-sm font-bold text-white sm:text-xs">
+          <button
+            type="button"
+            onClick={onAvatarClick}
+            className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-[#0d6b50] text-sm font-bold text-white outline-none transition hover:scale-[1.04] focus-visible:ring-2 focus-visible:ring-emerald-300/80 sm:text-xs"
+            title="Ver estadisticas"
+          >
             {avatarUrl && !avatarLoadFailed ? (
               <img
                 src={avatarUrl}
@@ -75,7 +81,7 @@ function PlayerActionCard({
             ) : (
               (playerName || "J").slice(0, 1).toUpperCase()
             )}
-          </div>
+          </button>
         </div>
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold leading-tight">{playerName || "Jugador"}</div>

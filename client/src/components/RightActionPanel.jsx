@@ -64,6 +64,7 @@ export default function RightActionPanel({
     avatarUrl,
     avatarLoadFailed,
     onAvatarError,
+    onAvatarClick,
     playerName,
     roomId,
     isCanto11Active,
@@ -309,6 +310,7 @@ export default function RightActionPanel({
         avatarUrl={avatarUrl}
         avatarLoadFailed={avatarLoadFailed}
         onAvatarError={onAvatarError}
+        onAvatarClick={onAvatarClick}
         playerName={playerName}
         roomId={roomId}
         isCanto11Active={isCanto11Active}
