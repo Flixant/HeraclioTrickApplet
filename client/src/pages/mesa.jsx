@@ -676,6 +676,16 @@ function Mesa({
       stopVoiceMonitor(peerId);
     };
 
+    const tryPlayAllRemoteAudio = () => {
+      for (const audio of voiceRemoteAudioRef.current.values()) {
+        try {
+          audio.muted = false;
+          audio.volume = 1;
+          audio.play().catch(() => {});
+        } catch {}
+      }
+    };
+
     const createPeerConnection = (peerId) => {
       if (!peerId || peerId === socket.id) return null;
       const existing = voicePeerConnectionsRef.current.get(peerId);
@@ -704,6 +714,7 @@ function Mesa({
           audio.srcObject = stream;
           audio.play().catch(() => {});
           startVoiceMonitor(peerId, stream);
+          tryPlayAllRemoteAudio();
         }
       };
       pc.onconnectionstatechange = () => {
@@ -748,7 +759,9 @@ function Mesa({
       (peerIds || [])
         .filter((peerId) => peerId && peerId !== socket.id)
         .forEach((peerId) => {
-          createOfferForPeer(peerId);
+          if (String(socket.id) < String(peerId)) {
+            createOfferForPeer(peerId);
+          }
         });
     };
 
@@ -792,10 +805,24 @@ function Mesa({
       } catch {}
     };
 
+    const onSocketConnectForVoice = () => {
+      if (disposed) return;
+      socket.emit("voice:join", { roomId });
+      voiceRoomJoinedRef.current = roomId;
+    };
+
+    const onSocketDisconnectForVoice = () => {
+      if (disposed) return;
+      // Drop stale peer state; it will rebuild after reconnect + voice:join.
+      clearAllVoiceResources({ stopLocalStream: false });
+    };
+
     socket.on("voice:peers", onVoicePeers);
     socket.on("voice:peer-joined", onVoicePeerJoined);
     socket.on("voice:peer-left", onVoicePeerLeft);
     socket.on("voice:signal", onVoiceSignal);
+    socket.on("connect", onSocketConnectForVoice);
+    socket.on("disconnect", onSocketDisconnectForVoice);
 
     if (voiceRoomJoinedRef.current !== roomId) {
       socket.emit("voice:join", { roomId });
@@ -808,6 +835,8 @@ function Mesa({
       socket.off("voice:peer-joined", onVoicePeerJoined);
       socket.off("voice:peer-left", onVoicePeerLeft);
       socket.off("voice:signal", onVoiceSignal);
+      socket.off("connect", onSocketConnectForVoice);
+      socket.off("disconnect", onSocketDisconnectForVoice);
       if (voiceRoomJoinedRef.current === roomId) {
         socket.emit("voice:leave", { roomId });
         voiceRoomJoinedRef.current = null;
@@ -882,6 +911,7 @@ function Mesa({
           });
         });
         socket.emit("voice:join", { roomId });
+        tryPlayAllRemoteAudio();
       } catch {
         // negotiation errors should not force-disable microphone capture
       }
