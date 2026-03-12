@@ -99,9 +99,9 @@ function HistoryPanel({ open, entries, onClose }) {
                       </div>
                     )}
                     <div className="relative">
-                      <div className={`absolute -left-4 top-2 h-[10px] w-[10px] rounded-full ${meta.dotClass}`} />
+                      <div className={`absolute -left-4 top-1/2 h-[10px] w-[10px] -translate-y-1/2 rounded-full ${meta.dotClass}`} />
                       <div className={`rounded-md border px-2 py-1.5 text-xs text-emerald-50 ${meta.cardClass}`}>
-                        <div className="flex items-start gap-1.5">
+                        <div className="flex items-center gap-1.5">
                           <span className="shrink-0 text-[10px] font-medium text-emerald-200">
                             {formatHistoryTime(entry.timestamp)}
                           </span>
