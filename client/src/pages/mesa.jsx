@@ -909,15 +909,31 @@ function Mesa({
       ? (starterIndex - safeMySeat + state.players.length) % state.players.length
       : 0;
 
-  const myPlayedCards = state.tableCards.filter((card) => card.playerId === myPlayerId);
+  const allTableCards = Array.isArray(state.tableCards) ? state.tableCards : [];
+  const florRevealCards = allTableCards.filter((card) => !!card?.isFlorReveal);
+  const isFlorRevealMode = !!state.roundEnding && florRevealCards.length > 0;
+  const normalTableCards = isFlorRevealMode
+    ? allTableCards.filter((card) => !card?.isFlorReveal)
+    : allTableCards;
+  const myPlayedCards = normalTableCards.filter((card) => card.playerId === myPlayerId);
   const opponentPlayedCards = opponent
-    ? state.tableCards.filter((card) => card.playerId === opponent.id)
+    ? normalTableCards.filter((card) => card.playerId === opponent.id)
     : [];
   const leftPlayedCards = leftPlayer
-    ? state.tableCards.filter((card) => card.playerId === leftPlayer.id)
+    ? normalTableCards.filter((card) => card.playerId === leftPlayer.id)
     : [];
   const rightPlayedCards = rightPlayer
-    ? state.tableCards.filter((card) => card.playerId === rightPlayer.id)
+    ? normalTableCards.filter((card) => card.playerId === rightPlayer.id)
+    : [];
+  const myFlorRevealCards = florRevealCards.filter((card) => card.playerId === myPlayerId);
+  const opponentFlorRevealCards = opponent
+    ? florRevealCards.filter((card) => card.playerId === opponent.id)
+    : [];
+  const leftFlorRevealCards = leftPlayer
+    ? florRevealCards.filter((card) => card.playerId === leftPlayer.id)
+    : [];
+  const rightFlorRevealCards = rightPlayer
+    ? florRevealCards.filter((card) => card.playerId === rightPlayer.id)
     : [];
 
   const roundPointValue = state.roundPointValue ?? 1;
@@ -2514,20 +2530,20 @@ function Mesa({
             <div className="absolute left-1/2 top-[-74px] z-30 -translate-x-1/2 text-center sm:top-[-100px]">
               {renderSeatAvatar(opponent, "R", "h-9 w-9 text-sm")}
 
-              {renderFanHand(opponentCards, { fromNorth: true })}
+              {!isFlorRevealMode && renderFanHand(opponentCards, { fromNorth: true })}
             </div>
 
             {isTwoVsTwo && (
               <div className="absolute left-[-46px] top-1/2 z-30 -translate-y-1/2 text-center sm:left-[-70px]">
                 {renderSeatAvatar(leftPlayer, "L", "h-8 w-8 text-xs")}
-                {renderSideFanBackCards(leftCards, "left")}
+                {!isFlorRevealMode && renderSideFanBackCards(leftCards, "left")}
               </div>
             )}
 
             {isTwoVsTwo && (
               <div className="absolute right-[-46px] top-1/2 z-30 -translate-y-1/2 text-center sm:right-[-70px]">
                 {renderSeatAvatar(rightPlayer, "R", "h-8 w-8 text-xs")}
-                {renderSideFanBackCards(rightCards, "right")}
+                {!isFlorRevealMode && renderSideFanBackCards(rightCards, "right")}
               </div>
             )}
 
@@ -2551,39 +2567,62 @@ function Mesa({
                 {renderDeckCardOrFallback(state.vira)}
               </div>
 
-              <div className="absolute left-1/2 top-[4%] -translate-x-1/2">
-                {isCanto11DuelDeclaring || isCanto11DuelResolving
-                  ? renderPlayedFan(opponentPlayedCards, { fromNorth: true })
-                  : renderPlayedStack(opponentPlayedCards, { fromNorth: true })}
-              </div>
-              <div className="absolute left-1/2 bottom-[4%] -translate-x-1/2">
-                {isCanto11DuelDeclaring || isCanto11DuelResolving
-                  ? renderPlayedFan(myPlayedCards)
-                  : renderPlayedStack(myPlayedCards)}
-              </div>
-              {isTwoVsTwo && (
-                <div className="absolute left-[10%] top-1/2 -translate-y-1/2">
-                  {isCanto11DuelDeclaring || isCanto11DuelResolving
-                    ? renderPlayedFan(leftPlayedCards, { rotateDeg: 90 })
-                    : renderPlayedStack(leftPlayedCards, { rotateDeg: 90, stackAxis: "x", stackSign: -1 })}
-                </div>
-              )}
-              {isTwoVsTwo && (
-                <div className="absolute right-[10%] top-1/2 -translate-y-1/2">
-                  {isCanto11DuelDeclaring || isCanto11DuelResolving
-                    ? renderPlayedFan(rightPlayedCards, { rotateDeg: -90 })
-                    : renderPlayedStack(rightPlayedCards, { rotateDeg: -90, stackAxis: "x", stackSign: 1 })}
-                </div>
-              )}
+              {isFlorRevealMode ? (
+                <>
+                  <div className="absolute left-1/2 top-[4%] -translate-x-1/2">
+                    {renderPlayedFan(opponentFlorRevealCards, { fromNorth: true })}
+                  </div>
+                  <div className="absolute left-1/2 bottom-[4%] -translate-x-1/2">
+                    {renderPlayedFan(myFlorRevealCards)}
+                  </div>
+                  {isTwoVsTwo && (
+                    <div className="absolute left-[10%] top-1/2 -translate-y-1/2">
+                      {renderPlayedFan(leftFlorRevealCards, { rotateDeg: 90 })}
+                    </div>
+                  )}
+                  {isTwoVsTwo && (
+                    <div className="absolute right-[10%] top-1/2 -translate-y-1/2">
+                      {renderPlayedFan(rightFlorRevealCards, { rotateDeg: -90 })}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <div className="absolute left-1/2 top-[4%] -translate-x-1/2">
+                    {isCanto11DuelDeclaring || isCanto11DuelResolving
+                      ? renderPlayedFan(opponentPlayedCards, { fromNorth: true })
+                      : renderPlayedStack(opponentPlayedCards, { fromNorth: true })}
+                  </div>
+                  <div className="absolute left-1/2 bottom-[4%] -translate-x-1/2">
+                    {isCanto11DuelDeclaring || isCanto11DuelResolving
+                      ? renderPlayedFan(myPlayedCards)
+                      : renderPlayedStack(myPlayedCards)}
+                  </div>
+                  {isTwoVsTwo && (
+                    <div className="absolute left-[10%] top-1/2 -translate-y-1/2">
+                      {isCanto11DuelDeclaring || isCanto11DuelResolving
+                        ? renderPlayedFan(leftPlayedCards, { rotateDeg: 90 })
+                        : renderPlayedStack(leftPlayedCards, { rotateDeg: 90, stackAxis: "x", stackSign: -1 })}
+                    </div>
+                  )}
+                  {isTwoVsTwo && (
+                    <div className="absolute right-[10%] top-1/2 -translate-y-1/2">
+                      {isCanto11DuelDeclaring || isCanto11DuelResolving
+                        ? renderPlayedFan(rightPlayedCards, { rotateDeg: -90 })
+                        : renderPlayedStack(rightPlayedCards, { rotateDeg: -90, stackAxis: "x", stackSign: 1 })}
+                    </div>
+                  )}
 
-              <div className="absolute left-1/2 bottom-[-56px] z-30 -translate-x-1/2 sm:bottom-[-65px]">
-                {renderFanHand(myCards, {
-                  playable: isPardaSelecting
-                    ? isMyTurn && !hasSubmittedParda && !hasPendingCall
-                    : isMyTurn && !hasPendingCall && !isPardaRevealing,
-                  selectedIndexes: pardaDraft,
-                })}
-              </div>
+                  <div className="absolute left-1/2 bottom-[-56px] z-30 -translate-x-1/2 sm:bottom-[-65px]">
+                    {renderFanHand(myCards, {
+                      playable: isPardaSelecting
+                        ? isMyTurn && !hasSubmittedParda && !hasPendingCall
+                        : isMyTurn && !hasPendingCall && !isPardaRevealing,
+                      selectedIndexes: pardaDraft,
+                    })}
+                  </div>
+                </>
+              )}
 
             </div>
           </div>
