@@ -239,6 +239,7 @@ function App() {
   });
   const [authError, setAuthError] = useState("");
   const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
+  const [socketDebug, setSocketDebug] = useState("socket: init");
   const autoJoinAttemptRef = useRef("");
   const pendingMatchUpdateRef = useRef(new Set());
   const myPlayerIdRef = useRef(null);
@@ -368,6 +369,11 @@ function App() {
   useEffect(() => {
     function onConnect() {
       setConnected(true);
+      setSocketDebug(
+        `socket: connected | id:${socket.id || "-"} | transport:${
+          socket?.io?.engine?.transport?.name || "-"
+        } | server:${socket?.io?.uri || "-"}`
+      );
       socket.emit("rooms:list");
       const saved = readStoredSession();
       const roomIdFromUrl = getRoomIdFromPathname();
@@ -379,11 +385,25 @@ function App() {
 
     function onDisconnect() {
       setConnected(false);
+      setSocketDebug("socket: disconnected");
       autoJoinAttemptRef.current = "";
+    }
+
+    function onConnectError(error) {
+      setConnected(false);
+      console.log("[APP] socket connect_error", error?.message || error);
+      setSocketDebug(`socket: connect_error | ${String(error?.message || "unknown")}`);
     }
 
     function onRoomsUpdate(updatedRooms) {
       setRooms(updatedRooms);
+      setSocketDebug(
+        `socket: ${
+          socket.connected ? "connected" : "disconnected"
+        } | rooms:${Array.isArray(updatedRooms) ? updatedRooms.length : 0} | transport:${
+          socket?.io?.engine?.transport?.name || "-"
+        }`
+      );
       if (!Array.isArray(updatedRooms)) return;
       for (const room of updatedRooms) {
         const playersCount = Array.isArray(room?.players) ? room.players.length : 0;
@@ -500,14 +520,30 @@ function App() {
 
     socket.on("connect", onConnect);
     socket.on("disconnect", onDisconnect);
+    socket.on("connect_error", onConnectError);
     socket.on("rooms:update", onRoomsUpdate);
     socket.on("game:start", onGameStart);
     socket.on("game:update", onGameUpdate);
     socket.on("match:return-roomlist", onReturnRoomList);
 
+    // If the socket connected before listeners were attached, sync immediately.
+    setConnected(socket.connected);
+    if (socket.connected) {
+      setSocketDebug(
+        `socket: already-connected | id:${socket.id || "-"} | transport:${
+          socket?.io?.engine?.transport?.name || "-"
+        }`
+      );
+      socket.emit("rooms:list");
+    } else {
+      setSocketDebug(`socket: connecting | server:${socket?.io?.uri || "-"}`);
+      socket.connect();
+    }
+
     return () => {
       socket.off("connect", onConnect);
       socket.off("disconnect", onDisconnect);
+      socket.off("connect_error", onConnectError);
       socket.off("rooms:update", onRoomsUpdate);
       socket.off("game:start", onGameStart);
       socket.off("game:update", onGameUpdate);
@@ -873,6 +909,7 @@ function App() {
     <RoomListPage
       connected={connected}
       rooms={rooms}
+      networkDebug={socketDebug}
       effectivePlayerName={effectivePlayerName}
       currentProfile={currentProfile}
       avatarUrl={avatarUrl}

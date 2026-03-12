@@ -17,6 +17,9 @@ const { firstError, guardTurn } = require("./game/guards");
 
 const app = express();
 app.use(cors());
+app.get("/health", (_req, res) => {
+  res.status(200).json({ ok: true, service: "truco-server", ts: Date.now() });
+});
 
 const server = http.createServer(app);
 
@@ -25,11 +28,12 @@ const LAN_DEV_ORIGIN =
   /^http:\/\/(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})(:\d+)?$/;
 const VERCEL_ORIGIN = /^https:\/\/([a-zA-Z0-9-]+\.)*vercel\.app$/;
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "";
+const CORS_ALLOW_ALL = String(process.env.CORS_ALLOW_ALL || "") === "1";
 
 const io = new Server(server, {
   cors: {
-    // TEMP (remove after testing): relax CORS for LAN frontend testing from phone/tablet.
     origin: (origin, callback) => {
+      if (CORS_ALLOW_ALL) return callback(null, true);
       if (!origin) return callback(null, true);
       if (
         LAN_DEV_ORIGIN.test(origin) ||
@@ -40,6 +44,7 @@ const io = new Server(server, {
       }
       return callback(new Error("Not allowed by CORS"));
     },
+    methods: ["GET", "POST"],
   },
   // Keep mobile clients connected longer while app/browser is briefly backgrounded.
   pingInterval: 25000,
@@ -124,6 +129,38 @@ function ensureAwayByPlayer(gameState) {
       gameState.awayByPlayer[id] = false;
     }
   }
+}
+
+function getVoiceParticipants(roomId) {
+  if (!roomId) return null;
+  let participants = voiceParticipantsByRoom.get(roomId);
+  if (!participants) {
+    participants = new Set();
+    voiceParticipantsByRoom.set(roomId, participants);
+  }
+  return participants;
+}
+
+function removeFromVoiceRoom(socket, reason = "leave", explicitRoomId = null) {
+  const roomId = explicitRoomId || socket.data?.voiceRoomId;
+  if (!roomId) return;
+  const participants = voiceParticipantsByRoom.get(roomId);
+  if (!participants) {
+    if (socket.data?.voiceRoomId === roomId) socket.data.voiceRoomId = null;
+    return;
+  }
+  const existed = participants.delete(socket.id);
+  if (existed) {
+    socket.to(roomId).emit("voice:peer-left", {
+      roomId,
+      peerId: socket.id,
+      reason,
+    });
+  }
+  if (participants.size === 0) {
+    voiceParticipantsByRoom.delete(roomId);
+  }
+  if (socket.data?.voiceRoomId === roomId) socket.data.voiceRoomId = null;
 }
 
 function unsubscribePlayerSeat(roomId, playerId, reason = "manual") {
@@ -1623,61 +1660,37 @@ io.on("connection", (socket) => {
 
   socket.emit("rooms:update", getPublicRooms());
 
-  const removeFromVoiceRoom = (roomId, reason = "leave") => {
-    if (!roomId) return;
-    const participants = voiceParticipantsByRoom.get(roomId);
-    if (!participants) return;
-    const existed = participants.delete(socket.id);
-    if (!existed) return;
-    socket.to(roomId).emit("voice:peer-left", {
-      roomId,
-      peerId: socket.id,
-      reason,
-    });
-    if (participants.size === 0) {
-      voiceParticipantsByRoom.delete(roomId);
-    }
-    if (socket.data.voiceRoomId === roomId) {
-      socket.data.voiceRoomId = null;
-    }
-  };
-
-  const ensureInVoiceRoom = (roomId) => {
-    if (!roomId) return false;
-    if (socket.data.roomId !== roomId) return false;
-    const room = getRoom(roomId);
-    if (!room) return false;
-    const seated = room.players.some((p) => p.id === socket.id);
-    if (!seated) return false;
-    if (socket.data.voiceRoomId && socket.data.voiceRoomId !== roomId) {
-      removeFromVoiceRoom(socket.data.voiceRoomId, "switch-room");
-    }
-    const participants = voiceParticipantsByRoom.get(roomId) || new Set();
-    voiceParticipantsByRoom.set(roomId, participants);
-    participants.add(socket.id);
-    socket.data.voiceRoomId = roomId;
-    return true;
-  };
-
   socket.on("rooms:list", () => {
     socket.emit("rooms:update", getPublicRooms());
   });
 
-  socket.on("voice:join", ({ roomId }) => {
+  socket.on("voice:join", ({ roomId } = {}) => {
     const targetRoomId = roomId || socket.data.roomId;
     if (!targetRoomId) return;
-    const joined = ensureInVoiceRoom(targetRoomId);
-    if (!joined) return;
-    const participants = voiceParticipantsByRoom.get(targetRoomId) || new Set();
+    if (socket.data.roomId !== targetRoomId) return;
+
+    if (socket.data.voiceRoomId && socket.data.voiceRoomId !== targetRoomId) {
+      removeFromVoiceRoom(socket, "switch-room", socket.data.voiceRoomId);
+    }
+
+    const participants = getVoiceParticipants(targetRoomId);
+    if (!participants) return;
+    const alreadyInVoice = participants.has(socket.id);
+    participants.add(socket.id);
+    socket.data.voiceRoomId = targetRoomId;
+
     const peerIds = [...participants].filter((id) => id !== socket.id);
     socket.emit("voice:peers", { roomId: targetRoomId, peerIds });
-    socket.to(targetRoomId).emit("voice:peer-joined", {
-      roomId: targetRoomId,
-      peerId: socket.id,
-    });
+
+    if (!alreadyInVoice) {
+      socket.to(targetRoomId).emit("voice:peer-joined", {
+        roomId: targetRoomId,
+        peerId: socket.id,
+      });
+    }
   });
 
-  socket.on("voice:signal", ({ roomId, toId, description, candidate }) => {
+  socket.on("voice:signal", ({ roomId, toId, description, candidate } = {}) => {
     const targetRoomId = roomId || socket.data.voiceRoomId || socket.data.roomId;
     if (!targetRoomId || !toId || toId === socket.id) return;
     const participants = voiceParticipantsByRoom.get(targetRoomId);
@@ -1685,7 +1698,7 @@ io.on("connection", (socket) => {
     const targetSocket = io.sockets.sockets.get(toId);
     if (!targetSocket) return;
     if (targetSocket.data?.roomId !== targetRoomId) return;
-    io.to(toId).emit("voice:signal", {
+    targetSocket.emit("voice:signal", {
       roomId: targetRoomId,
       fromId: socket.id,
       description: description || null,
@@ -1694,8 +1707,9 @@ io.on("connection", (socket) => {
   });
 
   socket.on("voice:leave", ({ roomId } = {}) => {
-    const targetRoomId = roomId || socket.data.voiceRoomId || socket.data.roomId;
-    removeFromVoiceRoom(targetRoomId, "manual");
+    const targetRoomId = roomId || socket.data.voiceRoomId;
+    if (!targetRoomId) return;
+    removeFromVoiceRoom(socket, "leave", targetRoomId);
   });
 
   socket.on("debug:bots", ({ enabled }) => {
@@ -3682,7 +3696,7 @@ function chooseBotCardIndex(gameState, botId, hand) {
       typeof playerUid === "string" && playerUid.trim() ? playerUid.trim() : null;
 
     if (currentRoom && currentRoom !== roomId) {
-      removeFromVoiceRoom(currentRoom, "switch-room");
+      removeFromVoiceRoom(socket, "switch-room", socket.data.voiceRoomId);
       const oldRoom = removePlayer(currentRoom, socket.id);
       socket.leave(currentRoom);
 
@@ -3797,7 +3811,7 @@ function chooseBotCardIndex(gameState, botId, hand) {
   socket.on("room:leave", () => {
     const roomId = socket.data.roomId;
     if (!roomId) return;
-    removeFromVoiceRoom(roomId, "room-leave");
+    removeFromVoiceRoom(socket, "room-leave", socket.data.voiceRoomId);
 
     clearSeatTimeout(roomId, socket.id);
     const room = getRoom(roomId);
@@ -5496,6 +5510,7 @@ function chooseBotCardIndex(gameState, botId, hand) {
 
   socket.on("disconnect", () => {
     console.log("Jugador desconectado:", socket.id);
+    removeFromVoiceRoom(socket, "disconnect", socket.data.voiceRoomId);
     for (const key of teamSignalCooldownByPlayer.keys()) {
       if (key.endsWith(`:${socket.id}`)) {
         teamSignalCooldownByPlayer.delete(key);
@@ -5503,10 +5518,6 @@ function chooseBotCardIndex(gameState, botId, hand) {
     }
 
     const roomId = socket.data.roomId;
-    const voiceRoomId = socket.data.voiceRoomId;
-    if (voiceRoomId) {
-      removeFromVoiceRoom(voiceRoomId, "disconnect");
-    }
     if (!roomId) return;
 
     const room = getRoom(roomId);

@@ -11,6 +11,39 @@ import TestControlsPanel from "../components/TestControlsPanel";
 import RightActionPanel from "../components/RightActionPanel";
 import logo from "../assets/logo.png";
 
+const DEFAULT_STUN_URLS = ["stun:stun.l.google.com:19302"];
+
+function parseIceUrlList(rawValue) {
+  if (typeof rawValue !== "string") return [];
+  return rawValue
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
+
+function buildIceServers() {
+  const stunUrls = parseIceUrlList(import.meta.env.VITE_WEBRTC_STUN_URLS).concat(DEFAULT_STUN_URLS);
+  const uniqueStun = [...new Set(stunUrls)];
+  const turnUrls = parseIceUrlList(import.meta.env.VITE_WEBRTC_TURN_URLS);
+  const turnUsername = import.meta.env.VITE_WEBRTC_TURN_USERNAME || "";
+  const turnCredential = import.meta.env.VITE_WEBRTC_TURN_CREDENTIAL || "";
+  const servers = [{ urls: uniqueStun }];
+  if (turnUrls.length && turnUsername && turnCredential) {
+    servers.push({
+      urls: turnUrls,
+      username: turnUsername,
+      credential: turnCredential,
+    });
+  }
+  return servers;
+}
+
+function shouldForceRelay() {
+  const raw = String(import.meta.env.VITE_WEBRTC_FORCE_RELAY || "");
+  if (!raw) return import.meta.env.PROD;
+  return raw === "1" || raw.toLowerCase() === "true";
+}
+
 function simplifyPlayerActionMessage(rawMessage) {
   if (typeof rawMessage !== "string") return rawMessage;
   const message = rawMessage.trim();
@@ -89,37 +122,6 @@ function computeEnvidoClient(cards, vira) {
   return Math.max(bestSingle, bestPair);
 }
 
-function getVoiceIceServers() {
-  const stunEnv = String(import.meta.env.VITE_WEBRTC_STUN_URLS || "").trim();
-  const turnUrlsEnv = String(import.meta.env.VITE_WEBRTC_TURN_URLS || import.meta.env.VITE_WEBRTC_TURN_URL || "").trim();
-  const turnUsername = String(import.meta.env.VITE_WEBRTC_TURN_USERNAME || "").trim();
-  const turnCredential = String(import.meta.env.VITE_WEBRTC_TURN_CREDENTIAL || "").trim();
-
-  const stunUrls = (stunEnv ? stunEnv.split(",") : [
-    "stun:stun.l.google.com:19302",
-    "stun:global.stun.twilio.com:3478",
-  ])
-    .map((item) => item.trim())
-    .filter(Boolean);
-
-  const iceServers = [];
-  if (stunUrls.length) {
-    iceServers.push({ urls: stunUrls });
-  }
-  const turnUrls = turnUrlsEnv
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-  if (turnUrls.length && turnUsername && turnCredential) {
-    iceServers.push({
-      urls: turnUrls,
-      username: turnUsername,
-      credential: turnCredential,
-    });
-  }
-  return iceServers;
-}
-
 function Mesa({
   roomId,
   gameState,
@@ -148,6 +150,7 @@ function Mesa({
   const [messageHistory, setMessageHistory] = useState([]);
   const [micEnabled, setMicEnabled] = useState(false);
   const [voiceSpeakingByPlayer, setVoiceSpeakingByPlayer] = useState({});
+  const [voiceStatus, setVoiceStatus] = useState("idle");
   const [selectedPlayerForModal, setSelectedPlayerForModal] = useState(null);
   const [selectedPlayerStats, setSelectedPlayerStats] = useState(null);
   const [selectedPlayerStatsLoading, setSelectedPlayerStatsLoading] = useState(false);
@@ -178,14 +181,14 @@ function Mesa({
   const roundCounterRef = useRef(1);
   const suppressMessagesRef = useRef(false);
   const historyHydratedRef = useRef(false);
-  const localVoiceStreamRef = useRef(null);
-  const voiceRoomJoinedRef = useRef(null);
-  const voicePeerConnectionsRef = useRef(new Map());
-  const voiceRemoteAudioRef = useRef(new Map());
-  const voiceMonitorCleanupRef = useRef(new Map());
-  const voiceAudioContextRef = useRef(null);
-  const voiceSpeakingCacheRef = useRef({});
   const historyStorageKey = roomId ? `truco_history_${roomId}` : null;
+  const voiceIceServersRef = useRef(buildIceServers());
+  const localVoiceStreamRef = useRef(null);
+  const micEnabledRef = useRef(false);
+  const voicePeerConnectionsRef = useRef(new Map());
+  const voiceRemoteAudioByPeerRef = useRef(new Map());
+  const voiceMeterCleanupByKeyRef = useRef(new Map());
+  const voiceAudioContextRef = useRef(null);
 
   const clampFloatingClockPos = (x, y) => {
     if (typeof window === "undefined") return { x, y };
@@ -197,100 +200,6 @@ function Mesa({
     };
   };
 
-  const setVoiceSpeakingFlag = (playerId, speaking) => {
-    if (!playerId) return;
-    const prev = !!voiceSpeakingCacheRef.current[playerId];
-    if (prev === speaking) return;
-    voiceSpeakingCacheRef.current[playerId] = speaking;
-    setVoiceSpeakingByPlayer((current) => {
-      const next = { ...current };
-      if (speaking) {
-        next[playerId] = true;
-      } else {
-        delete next[playerId];
-      }
-      return next;
-    });
-  };
-
-  const stopVoiceMonitor = (playerId) => {
-    const cleanup = voiceMonitorCleanupRef.current.get(playerId);
-    if (typeof cleanup === "function") {
-      cleanup();
-    }
-    voiceMonitorCleanupRef.current.delete(playerId);
-    setVoiceSpeakingFlag(playerId, false);
-  };
-
-  const startVoiceMonitor = (playerId, stream) => {
-    if (!playerId || !stream || typeof window === "undefined") return;
-    stopVoiceMonitor(playerId);
-    try {
-      const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-      if (!AudioContextCtor) return;
-      const context = voiceAudioContextRef.current || new AudioContextCtor();
-      voiceAudioContextRef.current = context;
-      context.resume?.().catch(() => {});
-      const analyser = context.createAnalyser();
-      analyser.fftSize = 256;
-      const source = context.createMediaStreamSource(stream);
-      source.connect(analyser);
-      const data = new Uint8Array(analyser.fftSize);
-      let rafId = null;
-      let speakingUntil = 0;
-      const tick = () => {
-        analyser.getByteTimeDomainData(data);
-        let sum = 0;
-        for (let i = 0; i < data.length; i += 1) {
-          sum += Math.abs(data[i] - 128);
-        }
-        const level = sum / data.length;
-        const now = Date.now();
-        if (level > 10) {
-          speakingUntil = now + 220;
-        }
-        setVoiceSpeakingFlag(playerId, speakingUntil > now);
-        rafId = window.requestAnimationFrame(tick);
-      };
-      tick();
-      voiceMonitorCleanupRef.current.set(playerId, () => {
-        if (rafId != null) {
-          window.cancelAnimationFrame(rafId);
-        }
-        source.disconnect();
-      });
-    } catch {
-      // ignore audio context failures
-    }
-  };
-
-  const clearAllVoiceResources = ({ stopLocalStream = false } = {}) => {
-    for (const [peerId, pc] of voicePeerConnectionsRef.current.entries()) {
-      try {
-        pc.ontrack = null;
-        pc.onicecandidate = null;
-        pc.close();
-      } catch {}
-      voicePeerConnectionsRef.current.delete(peerId);
-    }
-    for (const [peerId, audio] of voiceRemoteAudioRef.current.entries()) {
-      try {
-        audio.pause();
-        audio.srcObject = null;
-      } catch {}
-      stopVoiceMonitor(peerId);
-      voiceRemoteAudioRef.current.delete(peerId);
-    }
-    for (const playerId of voiceMonitorCleanupRef.current.keys()) {
-      stopVoiceMonitor(playerId);
-    }
-    if (stopLocalStream && localVoiceStreamRef.current) {
-      try {
-        localVoiceStreamRef.current.getTracks().forEach((track) => track.stop());
-      } catch {}
-      localVoiceStreamRef.current = null;
-    }
-  };
 
   const pushHistoryEntry = (text, contextState) => {
     const normalized = simplifyPlayerActionMessage(text);
@@ -559,6 +468,353 @@ function Mesa({
   });
 
   const myCards = state.hands[myPlayerId] || [];
+  const isVoiceDebug = import.meta.env.VITE_VOICE_DEBUG === "true";
+
+  const logVoice = (...args) => {
+    if (!isVoiceDebug) return;
+    console.log("[VOICE]", ...args);
+  };
+
+  const ensureVoiceAudioContext = async () => {
+    if (typeof window === "undefined") return null;
+    if (!voiceAudioContextRef.current) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return null;
+      voiceAudioContextRef.current = new Ctx();
+    }
+    if (voiceAudioContextRef.current.state === "suspended") {
+      try {
+        await voiceAudioContextRef.current.resume();
+      } catch {
+        // ignore
+      }
+    }
+    return voiceAudioContextRef.current;
+  };
+
+  const clearVoiceMeter = (key) => {
+    const cleanup = voiceMeterCleanupByKeyRef.current.get(key);
+    if (cleanup) {
+      cleanup();
+      voiceMeterCleanupByKeyRef.current.delete(key);
+    }
+    setSpeakingByPlayer((prev) => {
+      if (!Object.prototype.hasOwnProperty.call(prev, key)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
+
+  const startVoiceMeter = async (key, stream) => {
+    clearVoiceMeter(key);
+    const ctx = await ensureVoiceAudioContext();
+    if (!ctx) return;
+    try {
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      const data = new Uint8Array(analyser.fftSize);
+      let rafId = null;
+      let active = false;
+      const tick = () => {
+        analyser.getByteTimeDomainData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i += 1) {
+          sum += Math.abs(data[i] - 128);
+        }
+        const avg = sum / data.length;
+        const nextActive = avg > 7.5;
+        if (nextActive !== active) {
+          active = nextActive;
+          setSpeakingByPlayer((prev) => {
+            if (prev[key] === nextActive) return prev;
+            return { ...prev, [key]: nextActive };
+          });
+        }
+        rafId = requestAnimationFrame(tick);
+      };
+      tick();
+      voiceMeterCleanupByKeyRef.current.set(key, () => {
+        if (rafId) cancelAnimationFrame(rafId);
+        try {
+          source.disconnect();
+          analyser.disconnect();
+        } catch {
+          // ignore
+        }
+      });
+    } catch (error) {
+      logVoice("meter-error", key, error?.message || error);
+    }
+  };
+
+  const cleanupVoicePeer = (peerId) => {
+    const pc = voicePeerConnectionsRef.current.get(peerId);
+    if (pc) {
+      try {
+        pc.close();
+      } catch {
+        // ignore
+      }
+      voicePeerConnectionsRef.current.delete(peerId);
+    }
+    const audioEl = voiceRemoteAudioByPeerRef.current.get(peerId);
+    if (audioEl) {
+      try {
+        audioEl.srcObject = null;
+      } catch {
+        // ignore
+      }
+      voiceRemoteAudioByPeerRef.current.delete(peerId);
+    }
+    clearVoiceMeter(peerId);
+  };
+
+  const closeAllVoicePeers = () => {
+    for (const peerId of voicePeerConnectionsRef.current.keys()) {
+      cleanupVoicePeer(peerId);
+    }
+  };
+
+  const ensureVoicePeer = (peerId) => {
+    const existing = voicePeerConnectionsRef.current.get(peerId);
+    if (existing) return existing;
+    const pc = new RTCPeerConnection({
+      iceServers: voiceIceServersRef.current,
+      iceTransportPolicy: shouldForceRelay() ? "relay" : "all",
+    });
+    voicePeerConnectionsRef.current.set(peerId, pc);
+
+    const localStream = localVoiceStreamRef.current;
+    if (localStream) {
+      localStream.getTracks().forEach((track) => {
+        pc.addTrack(track, localStream);
+      });
+    }
+
+    pc.onicecandidate = (event) => {
+      if (!event.candidate) return;
+      logVoice("ice-candidate", {
+        to: peerId,
+        candidate: String(event.candidate.candidate || "").slice(0, 80),
+      });
+      socket.emit("voice:signal", {
+        roomId,
+        toId: peerId,
+        candidate: event.candidate,
+      });
+    };
+
+    pc.ontrack = (event) => {
+      const [remoteStream] = event.streams || [];
+      if (!remoteStream) return;
+      let audioEl = voiceRemoteAudioByPeerRef.current.get(peerId);
+      if (!audioEl) {
+        audioEl = new Audio();
+        audioEl.autoplay = true;
+        audioEl.playsInline = true;
+        voiceRemoteAudioByPeerRef.current.set(peerId, audioEl);
+      }
+      audioEl.srcObject = remoteStream;
+      audioEl.play().catch(() => {});
+      startVoiceMeter(peerId, remoteStream);
+      logVoice("remote-track", { peerId, tracks: remoteStream.getTracks().length });
+    };
+
+    pc.onconnectionstatechange = () => {
+      const stateValue = pc.connectionState;
+      logVoice("pc-state", { peerId, state: stateValue });
+      if (stateValue === "failed" || stateValue === "closed" || stateValue === "disconnected") {
+        cleanupVoicePeer(peerId);
+      }
+    };
+
+    return pc;
+  };
+
+  const createVoiceOffer = async (peerId) => {
+    try {
+      const pc = ensureVoicePeer(peerId);
+      if (pc.signalingState !== "stable") return;
+      const offer = await pc.createOffer({ offerToReceiveAudio: true });
+      await pc.setLocalDescription(offer);
+      socket.emit("voice:signal", {
+        roomId,
+        toId: peerId,
+        description: pc.localDescription,
+      });
+      logVoice("offer-sent", { to: peerId });
+    } catch (error) {
+      logVoice("offer-error", { to: peerId, error: error?.message || error });
+    }
+  };
+
+  const handleVoiceSignal = async ({ fromId, description, candidate }) => {
+    if (!fromId) return;
+    try {
+      const pc = ensureVoicePeer(fromId);
+      if (description) {
+        await pc.setRemoteDescription(new RTCSessionDescription(description));
+        if (description.type === "offer") {
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          socket.emit("voice:signal", {
+            roomId,
+            toId: fromId,
+            description: pc.localDescription,
+          });
+          logVoice("answer-sent", { to: fromId });
+        }
+      } else if (candidate) {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      }
+    } catch (error) {
+      logVoice("signal-error", { fromId, error: error?.message || error });
+    }
+  };
+
+  const stopVoiceSession = (reason = "manual", keepToggle = false) => {
+    if (roomId) {
+      socket.emit("voice:leave", { roomId });
+    }
+    closeAllVoicePeers();
+    const localStream = localVoiceStreamRef.current;
+    if (localStream) {
+      localStream.getTracks().forEach((track) => track.stop());
+      localVoiceStreamRef.current = null;
+    }
+    clearVoiceMeter(myPlayerId || socket.id);
+    if (!keepToggle) setMicEnabled(false);
+    micEnabledRef.current = false;
+    setVoiceStatus(reason);
+  };
+
+  const toggleVoiceMic = async () => {
+    if (micEnabled) {
+      stopVoiceSession("disabled");
+      return;
+    }
+    if (!roomId) return;
+    const isLocalhost =
+      typeof window !== "undefined" &&
+      (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+    const isSecureAllowed = (typeof window !== "undefined" && window.isSecureContext) || isLocalhost;
+    if (!isSecureAllowed) {
+      setVoiceStatus("insecure-context");
+      setMessage("Microfono bloqueado: usa HTTPS o localhost");
+      if (messageTimeoutRef.current) clearTimeout(messageTimeoutRef.current);
+      messageTimeoutRef.current = setTimeout(() => {
+        setMessage("");
+        messageTimeoutRef.current = null;
+      }, 2500);
+      return;
+    }
+    try {
+      setVoiceStatus("requesting-mic");
+      const localStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: false,
+      });
+      localVoiceStreamRef.current = localStream;
+      micEnabledRef.current = true;
+      await startVoiceMeter(myPlayerId || socket.id, localStream);
+      setMicEnabled(true);
+      setVoiceStatus("joining");
+      socket.emit("voice:join", { roomId });
+      logVoice("join-requested", { roomId, socketId: socket.id });
+    } catch (error) {
+      setMicEnabled(false);
+      micEnabledRef.current = false;
+      setVoiceStatus("mic-error");
+      logVoice("mic-error", error?.message || error);
+      const reason = String(error?.name || error?.message || "permiso denegado");
+      setMessage(`No se pudo abrir el microfono (${reason})`);
+      if (messageTimeoutRef.current) clearTimeout(messageTimeoutRef.current);
+      messageTimeoutRef.current = setTimeout(() => {
+        setMessage("");
+        messageTimeoutRef.current = null;
+      }, 2500);
+    }
+  };
+
+  useEffect(() => {
+    micEnabledRef.current = micEnabled;
+  }, [micEnabled]);
+
+  useEffect(() => {
+    if (!roomId) return undefined;
+
+    const shouldInitiateWith = (peerId) => String(socket.id || "") < String(peerId || "");
+
+    const onVoicePeers = ({ roomId: incomingRoomId, peerIds = [] }) => {
+      if (incomingRoomId && incomingRoomId !== roomId) return;
+      if (!micEnabledRef.current || !localVoiceStreamRef.current) return;
+      setVoiceStatus("joined");
+      peerIds.forEach((peerId) => {
+        ensureVoicePeer(peerId);
+        if (shouldInitiateWith(peerId)) {
+          createVoiceOffer(peerId);
+        }
+      });
+      logVoice("voice-peers", peerIds);
+    };
+
+    const onVoicePeerJoined = ({ roomId: incomingRoomId, peerId }) => {
+      if (!peerId) return;
+      if (incomingRoomId && incomingRoomId !== roomId) return;
+      if (!micEnabledRef.current || !localVoiceStreamRef.current) return;
+      ensureVoicePeer(peerId);
+      if (shouldInitiateWith(peerId)) {
+        createVoiceOffer(peerId);
+      }
+      logVoice("peer-joined", peerId);
+    };
+
+    const onVoicePeerLeft = ({ roomId: incomingRoomId, peerId }) => {
+      if (!peerId) return;
+      if (incomingRoomId && incomingRoomId !== roomId) return;
+      cleanupVoicePeer(peerId);
+      logVoice("peer-left", peerId);
+    };
+
+    const onVoiceSignal = ({ roomId: incomingRoomId, fromId, description, candidate }) => {
+      if (incomingRoomId && incomingRoomId !== roomId) return;
+      if (!micEnabledRef.current || !localVoiceStreamRef.current) return;
+      handleVoiceSignal({ fromId, description, candidate });
+    };
+
+    const onVoiceSocketReconnect = () => {
+      if (!micEnabledRef.current || !localVoiceStreamRef.current) return;
+      socket.emit("voice:join", { roomId });
+      setVoiceStatus("rejoining");
+    };
+
+    socket.on("voice:peers", onVoicePeers);
+    socket.on("voice:peer-joined", onVoicePeerJoined);
+    socket.on("voice:peer-left", onVoicePeerLeft);
+    socket.on("voice:signal", onVoiceSignal);
+    socket.on("connect", onVoiceSocketReconnect);
+
+    return () => {
+      socket.off("voice:peers", onVoicePeers);
+      socket.off("voice:peer-joined", onVoicePeerJoined);
+      socket.off("voice:peer-left", onVoicePeerLeft);
+      socket.off("voice:signal", onVoiceSignal);
+      socket.off("connect", onVoiceSocketReconnect);
+    };
+  }, [roomId, myPlayerId]);
+
+  useEffect(() => {
+    return () => {
+      stopVoiceSession("unmount", true);
+    };
+  }, []);
   const allowedTestEmails = new Set([
     "frantoima@gmail.com",
     "fantomcdolibre1@gmail.com",
@@ -649,278 +905,6 @@ function Mesa({
     if (idx < 0) return null;
     return idx % 2 === 0 ? "team1" : "team2";
   };
-
-  useEffect(() => {
-    if (!roomId || !myPlayerId) return undefined;
-    let disposed = false;
-    const iceServers = getVoiceIceServers();
-
-    const removePeer = (peerId) => {
-      const pc = voicePeerConnectionsRef.current.get(peerId);
-      if (pc) {
-        try {
-          pc.ontrack = null;
-          pc.onicecandidate = null;
-          pc.close();
-        } catch {}
-        voicePeerConnectionsRef.current.delete(peerId);
-      }
-      const audio = voiceRemoteAudioRef.current.get(peerId);
-      if (audio) {
-        try {
-          audio.pause();
-          audio.srcObject = null;
-        } catch {}
-        voiceRemoteAudioRef.current.delete(peerId);
-      }
-      stopVoiceMonitor(peerId);
-    };
-
-    const tryPlayAllRemoteAudio = () => {
-      for (const audio of voiceRemoteAudioRef.current.values()) {
-        try {
-          audio.muted = false;
-          audio.volume = 1;
-          audio.play().catch(() => {});
-        } catch {}
-      }
-    };
-
-    const createPeerConnection = (peerId) => {
-      if (!peerId || peerId === socket.id) return null;
-      const existing = voicePeerConnectionsRef.current.get(peerId);
-      if (existing) return existing;
-      const pc = new RTCPeerConnection({ iceServers });
-      voicePeerConnectionsRef.current.set(peerId, pc);
-      pc.onicecandidate = (event) => {
-        if (!event.candidate) return;
-        socket.emit("voice:signal", {
-          roomId,
-          toId: peerId,
-          candidate: event.candidate,
-        });
-      };
-      pc.ontrack = (event) => {
-        const stream = event.streams?.[0];
-        if (!stream) return;
-        let audio = voiceRemoteAudioRef.current.get(peerId);
-        if (!audio) {
-          audio = new Audio();
-          audio.autoplay = true;
-          audio.playsInline = true;
-          voiceRemoteAudioRef.current.set(peerId, audio);
-        }
-        if (audio.srcObject !== stream) {
-          audio.srcObject = stream;
-          audio.play().catch(() => {});
-          startVoiceMonitor(peerId, stream);
-          tryPlayAllRemoteAudio();
-        }
-      };
-      pc.onconnectionstatechange = () => {
-        const stateValue = String(pc.connectionState || "");
-        if (stateValue === "failed" || stateValue === "closed" || stateValue === "disconnected") {
-          removePeer(peerId);
-        }
-      };
-      return pc;
-    };
-
-    const addLocalTracksIfNeeded = (pc) => {
-      const stream = localVoiceStreamRef.current;
-      if (!pc || !stream) return;
-      const senders = pc.getSenders();
-      stream.getAudioTracks().forEach((track) => {
-        const alreadyAdded = senders.some((sender) => sender.track && sender.track.id === track.id);
-        if (!alreadyAdded) {
-          pc.addTrack(track, stream);
-        }
-      });
-    };
-
-    const createOfferForPeer = async (peerId) => {
-      try {
-        const pc = createPeerConnection(peerId);
-        if (!pc) return;
-        if (pc.signalingState !== "stable") return;
-        addLocalTracksIfNeeded(pc);
-        const offer = await pc.createOffer({ offerToReceiveAudio: true });
-        await pc.setLocalDescription(offer);
-        socket.emit("voice:signal", {
-          roomId,
-          toId: peerId,
-          description: pc.localDescription,
-        });
-      } catch {}
-    };
-
-    const onVoicePeers = ({ roomId: payloadRoomId, peerIds }) => {
-      if (payloadRoomId !== roomId || disposed) return;
-      (peerIds || [])
-        .filter((peerId) => peerId && peerId !== socket.id)
-        .forEach((peerId) => {
-          if (String(socket.id) < String(peerId)) {
-            createOfferForPeer(peerId);
-          }
-        });
-    };
-
-    const onVoicePeerJoined = ({ roomId: payloadRoomId, peerId }) => {
-      if (payloadRoomId !== roomId || disposed) return;
-      if (!peerId || peerId === socket.id) return;
-      // deterministic initiator to avoid offer glare
-      if (String(socket.id) < String(peerId)) {
-        createOfferForPeer(peerId);
-      }
-    };
-
-    const onVoicePeerLeft = ({ roomId: payloadRoomId, peerId }) => {
-      if (payloadRoomId !== roomId || disposed) return;
-      removePeer(peerId);
-    };
-
-    const onVoiceSignal = async ({ roomId: payloadRoomId, fromId, description, candidate }) => {
-      if (payloadRoomId !== roomId || disposed) return;
-      if (!fromId || fromId === socket.id) return;
-      const pc = createPeerConnection(fromId);
-      if (!pc) return;
-      try {
-        if (description) {
-          if (description.type === "offer") {
-            addLocalTracksIfNeeded(pc);
-            await pc.setRemoteDescription(new RTCSessionDescription(description));
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            socket.emit("voice:signal", {
-              roomId,
-              toId: fromId,
-              description: pc.localDescription,
-            });
-          } else if (description.type === "answer") {
-            await pc.setRemoteDescription(new RTCSessionDescription(description));
-          }
-        } else if (candidate) {
-          await pc.addIceCandidate(candidate);
-        }
-      } catch {}
-    };
-
-    const onSocketConnectForVoice = () => {
-      if (disposed) return;
-      socket.emit("voice:join", { roomId });
-      voiceRoomJoinedRef.current = roomId;
-    };
-
-    const onSocketDisconnectForVoice = () => {
-      if (disposed) return;
-      // Drop stale peer state; it will rebuild after reconnect + voice:join.
-      clearAllVoiceResources({ stopLocalStream: false });
-    };
-
-    socket.on("voice:peers", onVoicePeers);
-    socket.on("voice:peer-joined", onVoicePeerJoined);
-    socket.on("voice:peer-left", onVoicePeerLeft);
-    socket.on("voice:signal", onVoiceSignal);
-    socket.on("connect", onSocketConnectForVoice);
-    socket.on("disconnect", onSocketDisconnectForVoice);
-
-    if (voiceRoomJoinedRef.current !== roomId) {
-      socket.emit("voice:join", { roomId });
-      voiceRoomJoinedRef.current = roomId;
-    }
-
-    return () => {
-      disposed = true;
-      socket.off("voice:peers", onVoicePeers);
-      socket.off("voice:peer-joined", onVoicePeerJoined);
-      socket.off("voice:peer-left", onVoicePeerLeft);
-      socket.off("voice:signal", onVoiceSignal);
-      socket.off("connect", onSocketConnectForVoice);
-      socket.off("disconnect", onSocketDisconnectForVoice);
-      if (voiceRoomJoinedRef.current === roomId) {
-        socket.emit("voice:leave", { roomId });
-        voiceRoomJoinedRef.current = null;
-      }
-      clearAllVoiceResources({ stopLocalStream: true });
-      try {
-        voiceAudioContextRef.current?.close?.();
-      } catch {}
-      voiceAudioContextRef.current = null;
-    };
-  }, [myPlayerId, roomId]);
-
-  useEffect(() => {
-    if (!roomId || !myPlayerId) return;
-    if (!micEnabled) {
-      if (localVoiceStreamRef.current) {
-        localVoiceStreamRef.current.getAudioTracks().forEach((track) => {
-          track.enabled = false;
-        });
-      }
-      setVoiceSpeakingFlag(myPlayerId, false);
-      return;
-    }
-    let cancelled = false;
-    const enableMic = async () => {
-      if (!navigator?.mediaDevices?.getUserMedia) {
-        setMicEnabled(false);
-        setMessage("No se pudo activar el microfono");
-        return;
-      }
-
-      if (!localVoiceStreamRef.current) {
-        try {
-          localVoiceStreamRef.current = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true,
-            },
-            video: false,
-          });
-        } catch {
-          if (!cancelled) {
-            setMicEnabled(false);
-            setMessage("No se pudo activar el microfono");
-          }
-          return;
-        }
-      }
-      if (cancelled || !localVoiceStreamRef.current) return;
-
-      try {
-        localVoiceStreamRef.current.getAudioTracks().forEach((track) => {
-          track.enabled = true;
-        });
-        startVoiceMonitor(myPlayerId, localVoiceStreamRef.current);
-        voicePeerConnectionsRef.current.forEach((pc) => {
-          const senders = pc.getSenders();
-          const renegotiatePeers = new Set();
-          localVoiceStreamRef.current.getAudioTracks().forEach((track) => {
-            const existingSender = senders.find((sender) => sender.track && sender.track.kind === "audio");
-            if (existingSender && existingSender.track?.id !== track.id) {
-              existingSender.replaceTrack(track).catch(() => {});
-            } else if (!existingSender) {
-              pc.addTrack(track, localVoiceStreamRef.current);
-              const peerId = [...voicePeerConnectionsRef.current.entries()].find(([, item]) => item === pc)?.[0];
-              if (peerId) renegotiatePeers.add(peerId);
-            }
-          });
-          renegotiatePeers.forEach((peerId) => {
-            createOfferForPeer(peerId);
-          });
-        });
-        socket.emit("voice:join", { roomId });
-        tryPlayAllRemoteAudio();
-      } catch {
-        // negotiation errors should not force-disable microphone capture
-      }
-    };
-    enableMic();
-    return () => {
-      cancelled = true;
-    };
-  }, [micEnabled, myPlayerId, roomId]);
 
   useEffect(() => {
     if (!selectedPlayerForModal) return undefined;
@@ -1301,6 +1285,7 @@ function Mesa({
     const playerId = player?.id || fallback;
     const avatar = getPlayerAvatarUrl(player);
     const failed = !!remoteAvatarLoadFailed[playerId];
+    const isSpeaking = !!speakingByPlayer[playerId];
     const showTurnCountdownRing =
       !!player?.id &&
       player.id === activeTurnTimerPlayerId &&
@@ -1340,7 +1325,9 @@ function Mesa({
           type="button"
           onClick={() => openPlayerProfileModal(player)}
           className={`flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-[#0d6b50] font-bold text-white shadow outline-none transition hover:scale-[1.04] focus-visible:ring-2 focus-visible:ring-emerald-300/80 ${
-            isVoiceSpeaking ? "ring-2 ring-cyan-300/70" : ""
+            isVoiceSpeaking || isSpeaking
+              ? "ring-2 ring-cyan-300/90 shadow-[0_0_0_4px_rgba(34,211,238,0.22)] animate-pulse"
+              : ""
           }`}
         >
           {avatar && !failed ? (
@@ -2066,7 +2053,8 @@ function Mesa({
     canCallFlor,
     onCallEnvido: () => callEnvido(),
     micEnabled,
-    onToggleMic: () => setMicEnabled((prev) => !prev),
+    onToggleMic: toggleVoiceMic,
+    isSpeaking: !!speakingByPlayer[myPlayerId],
     turnTimerPlayerId: activeTurnTimerPlayerId,
     turnTimerRemainingMs: activeTurnTimerRemainingMs,
     turnTimerDurationMs: activeTurnTimerDurationMs,

@@ -28,6 +28,7 @@ function PlayerActionCard({
   onCallEnvido,
   micEnabled,
   onToggleMic,
+  isSpeaking,
   turnTimerPlayerId,
   turnTimerRemainingMs,
   turnTimerDurationMs,
@@ -71,7 +72,9 @@ function PlayerActionCard({
             type="button"
             onClick={onAvatarClick}
             className={`flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-[#0d6b50] text-sm font-bold text-white outline-none transition hover:scale-[1.04] focus-visible:ring-2 focus-visible:ring-emerald-300/80 sm:text-xs ${
-              isVoiceSpeaking ? "ring-2 ring-cyan-300/80 animate-pulse" : ""
+              isVoiceSpeaking || isSpeaking
+                ? "ring-2 ring-cyan-300/90 shadow-[0_0_0_4px_rgba(34,211,238,0.22)] animate-pulse"
+                : ""
             }`}
             title="Ver estadisticas"
           >
@@ -100,7 +103,7 @@ function PlayerActionCard({
               ? "border-blue-300/60 bg-blue-500 text-white shadow-sm hover:bg-blue-400"
               : "border-slate-300 bg-slate-200 text-slate-600 hover:bg-slate-300"
           }`}
-          title="Dummy: activar o desactivar microfono"
+          title="Activar o desactivar microfono"
           aria-label={micEnabled ? "Microfono activado" : "Microfono desactivado"}
         >
           {micEnabled ? (

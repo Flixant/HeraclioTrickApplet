@@ -4,6 +4,7 @@ import logo from "../assets/logo.png";
 export default function RoomListPage({
   connected,
   rooms,
+  networkDebug,
   effectivePlayerName,
   currentProfile,
   avatarUrl,
@@ -213,6 +214,9 @@ export default function RoomListPage({
             >
               {isGuestMode ? "Salir invitado" : "Cerrar sesion"}
             </button>
+          </div>
+          <div className="mt-2 rounded-md border border-amber-300/20 bg-black/30 px-2 py-1 text-[10px] text-amber-100/90">
+            {networkDebug || "socket: sin diagnostico"}
           </div>
         </header>
 

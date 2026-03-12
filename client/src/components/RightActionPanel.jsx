@@ -90,6 +90,7 @@ export default function RightActionPanel({
     onCallEnvido,
     micEnabled,
     onToggleMic,
+    isSpeaking,
     turnTimerPlayerId,
     turnTimerRemainingMs,
     turnTimerDurationMs,
@@ -339,6 +340,7 @@ export default function RightActionPanel({
         onCallEnvido={onCallEnvido}
         micEnabled={micEnabled}
         onToggleMic={onToggleMic}
+        isSpeaking={isSpeaking}
         turnTimerPlayerId={turnTimerPlayerId}
         turnTimerRemainingMs={turnTimerRemainingMs}
         turnTimerDurationMs={turnTimerDurationMs}
