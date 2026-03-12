@@ -244,6 +244,9 @@ function App() {
   const myPlayerIdRef = useRef(null);
   const suppressAutoJoinUntilRef = useRef(0);
   const countdownConsumedUntilRef = useRef(new Map());
+  const liveRoomIdRef = useRef(roomId);
+  const liveGameStateRef = useRef(gameState);
+  const livePendingGameStartRef = useRef(pendingGameStart);
 
   const currentProfile = profile || guestProfile;
   const isGuestMode = !!guestProfile;
@@ -355,6 +358,18 @@ function App() {
   }, [pendingGameStart]);
 
   useEffect(() => {
+    liveRoomIdRef.current = roomId;
+  }, [roomId]);
+
+  useEffect(() => {
+    liveGameStateRef.current = gameState;
+  }, [gameState]);
+
+  useEffect(() => {
+    livePendingGameStartRef.current = pendingGameStart;
+  }, [pendingGameStart]);
+
+  useEffect(() => {
     if (!pendingGameStart?.roomId || pendingGameStart.showCountdown) return undefined;
     const timer = setTimeout(() => {
       setPendingGameStart((prev) => {
@@ -398,11 +413,15 @@ function App() {
     }
 
     function onGameStart({ roomId: nextRoomId, gameState: nextGameState }) {
+      const activeRoomId = liveRoomIdRef.current;
+      const activeGameState = liveGameStateRef.current;
+      const alreadyPlayingThisRoom =
+        activeRoomId === nextRoomId && !!activeGameState && !activeGameState.matchEnded;
       const shouldUseCountdown = shouldUseStartCountdown(nextGameState);
       const countdownAlreadyConsumed =
         Number(countdownConsumedUntilRef.current.get(nextRoomId) || 0) > Date.now();
       setRoomId(nextRoomId);
-      if (shouldUseCountdown && !countdownAlreadyConsumed) {
+      if (!alreadyPlayingThisRoom && shouldUseCountdown && !countdownAlreadyConsumed) {
         setGameState(null);
         setPendingGameStart((prev) => {
           if (prev?.roomId === nextRoomId) {
@@ -436,22 +455,29 @@ function App() {
       const payloadRoomId = payload?.roomId;
       const nextState = payload?.gameState || payload;
       if (!nextState) return;
-      if (payloadRoomId && (!roomId || payloadRoomId !== roomId)) return;
-      const targetRoomId = payloadRoomId || roomId || null;
+      const activeRoomId = liveRoomIdRef.current;
+      const activeGameState = liveGameStateRef.current;
+      const activePendingStart = livePendingGameStartRef.current;
+      if (payloadRoomId && (!activeRoomId || payloadRoomId !== activeRoomId)) return;
+      const targetRoomId = payloadRoomId || activeRoomId || null;
       const shouldUseCountdown = shouldUseStartCountdown(nextState);
       const hasPendingForRoom =
-        !!pendingGameStart?.roomId &&
-        (!!payloadRoomId ? pendingGameStart.roomId === payloadRoomId : pendingGameStart.roomId === roomId);
+        !!activePendingStart?.roomId &&
+        (!!payloadRoomId ? activePendingStart.roomId === payloadRoomId : activePendingStart.roomId === activeRoomId);
       const countdownAlreadyConsumed =
         !!targetRoomId &&
         Number(countdownConsumedUntilRef.current.get(targetRoomId) || 0) > Date.now();
+      const alreadyPlayingThisRoom =
+        !!activeGameState &&
+        !activeGameState.matchEnded &&
+        (!payloadRoomId || payloadRoomId === activeRoomId);
 
-      if ((shouldUseCountdown && !countdownAlreadyConsumed) || hasPendingForRoom) {
-        if (payloadRoomId && roomId !== payloadRoomId) {
+      if (((shouldUseCountdown && !countdownAlreadyConsumed) || hasPendingForRoom) && !alreadyPlayingThisRoom) {
+        if (payloadRoomId && activeRoomId !== payloadRoomId) {
           setRoomId(payloadRoomId);
         }
         setPendingGameStart((prev) => {
-          const effectiveRoomId = payloadRoomId || prev?.roomId || roomId || null;
+          const effectiveRoomId = payloadRoomId || prev?.roomId || activeRoomId || null;
           if (!effectiveRoomId) return prev;
           if (!prev || prev.roomId !== effectiveRoomId) {
             return {
@@ -527,7 +553,7 @@ function App() {
       socket.off("game:update", onGameUpdate);
       socket.off("match:return-roomlist", onReturnRoomList);
     };
-  }, [avatarUrl, currentProfile?.profileId, currentProfile?.uid, effectivePlayerName, isGuestMode, pendingGameStart, reconnectToken, roomId]);
+  }, [avatarUrl, currentProfile?.profileId, currentProfile?.uid, effectivePlayerName, isGuestMode, reconnectToken]);
 
   useEffect(() => {
     attemptJoinByUrl(effectivePlayerName, avatarUrl);
