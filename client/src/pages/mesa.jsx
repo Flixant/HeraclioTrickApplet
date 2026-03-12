@@ -833,11 +833,14 @@ function Mesa({
     }
     let cancelled = false;
     const enableMic = async () => {
-      try {
-        if (!navigator?.mediaDevices?.getUserMedia) {
-          throw new Error("getUserMedia no disponible");
-        }
-        if (!localVoiceStreamRef.current) {
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        setMicEnabled(false);
+        setMessage("No se pudo activar el microfono");
+        return;
+      }
+
+      if (!localVoiceStreamRef.current) {
+        try {
           localVoiceStreamRef.current = await navigator.mediaDevices.getUserMedia({
             audio: {
               echoCancellation: true,
@@ -846,35 +849,41 @@ function Mesa({
             },
             video: false,
           });
+        } catch {
+          if (!cancelled) {
+            setMicEnabled(false);
+            setMessage("No se pudo activar el microfono");
+          }
+          return;
         }
-        if (cancelled || !localVoiceStreamRef.current) return;
+      }
+      if (cancelled || !localVoiceStreamRef.current) return;
+
+      try {
         localVoiceStreamRef.current.getAudioTracks().forEach((track) => {
           track.enabled = true;
         });
         startVoiceMonitor(myPlayerId, localVoiceStreamRef.current);
         voicePeerConnectionsRef.current.forEach((pc) => {
           const senders = pc.getSenders();
-        const renegotiatePeers = new Set();
-        localVoiceStreamRef.current.getAudioTracks().forEach((track) => {
-          const existingSender = senders.find((sender) => sender.track && sender.track.kind === "audio");
-          if (existingSender && existingSender.track?.id !== track.id) {
-            existingSender.replaceTrack(track).catch(() => {});
-          } else if (!existingSender) {
-            pc.addTrack(track, localVoiceStreamRef.current);
-            const peerId = [...voicePeerConnectionsRef.current.entries()].find(([, item]) => item === pc)?.[0];
-            if (peerId) renegotiatePeers.add(peerId);
-          }
-        });
+          const renegotiatePeers = new Set();
+          localVoiceStreamRef.current.getAudioTracks().forEach((track) => {
+            const existingSender = senders.find((sender) => sender.track && sender.track.kind === "audio");
+            if (existingSender && existingSender.track?.id !== track.id) {
+              existingSender.replaceTrack(track).catch(() => {});
+            } else if (!existingSender) {
+              pc.addTrack(track, localVoiceStreamRef.current);
+              const peerId = [...voicePeerConnectionsRef.current.entries()].find(([, item]) => item === pc)?.[0];
+              if (peerId) renegotiatePeers.add(peerId);
+            }
+          });
           renegotiatePeers.forEach((peerId) => {
             createOfferForPeer(peerId);
           });
         });
         socket.emit("voice:join", { roomId });
       } catch {
-        if (!cancelled) {
-          setMicEnabled(false);
-          setMessage("No se pudo activar el microfono");
-        }
+        // negotiation errors should not force-disable microphone capture
       }
     };
     enableMic();
