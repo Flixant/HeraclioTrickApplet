@@ -233,9 +233,33 @@ function findAwayPlayerForTimerForfeit(gameState) {
   return firstAway?.id || null;
 }
 
+function getPendingResponseForTimeout(gameState) {
+  if (!gameState) return null;
+  if (isFlorEnvidoPending(gameState)) {
+    return {
+      type: "flor-envido",
+      responderId: gameState?.flor?.florEnvidoResponderId || null,
+    };
+  }
+  if (gameState.envido?.status === "pending") {
+    return {
+      type: "envido",
+      responderId: gameState?.envido?.responderId || null,
+    };
+  }
+  if (gameState.truco?.status === "pending") {
+    return {
+      type: "truco",
+      responderId: gameState?.truco?.responderId || null,
+    };
+  }
+  return null;
+}
+
 function getTurnTimeoutArmState(room, gameState) {
   if (!room || !gameState) return { canArm: false, retryMs: null };
-  const turnId = gameState.turn;
+  const pendingResponse = getPendingResponseForTimeout(gameState);
+  const turnId = pendingResponse?.responderId || gameState.turn;
   if (!turnId || isBotPlayerId(turnId)) return { canArm: false, retryMs: null };
   if (gameState.matchEnded || gameState.roundEnding) return { canArm: false, retryMs: null };
   if (isCanto11Active(gameState)) return { canArm: false, retryMs: null };
@@ -250,15 +274,23 @@ function getTurnTimeoutArmState(room, gameState) {
     const wait = Math.max(80, until - Date.now() + 30);
     return { canArm: false, retryMs: wait };
   }
-  if (gameState.truco?.status === "pending") return { canArm: false, retryMs: null };
-  if (gameState.envido?.status === "pending") return { canArm: false, retryMs: null };
-  if (isFlorEnvidoPending(gameState)) return { canArm: false, retryMs: null };
-  if (gameState.firstHandTie && (gameState.pardaPhase === "selecting" || gameState.pardaPhase === "reveal")) {
+  if (
+    !pendingResponse &&
+    gameState.firstHandTie &&
+    (gameState.pardaPhase === "selecting" || gameState.pardaPhase === "reveal")
+  ) {
     return { canArm: false, retryMs: null };
   }
-  const hand = gameState.hands?.[turnId];
-  if (!Array.isArray(hand) || hand.length === 0) return { canArm: false, retryMs: null };
-  return { canArm: true, retryMs: null };
+  if (!pendingResponse) {
+    const hand = gameState.hands?.[turnId];
+    if (!Array.isArray(hand) || hand.length === 0) return { canArm: false, retryMs: null };
+  }
+  return {
+    canArm: true,
+    retryMs: null,
+    turnId,
+    pendingType: pendingResponse?.type || null,
+  };
 }
 
 function getLowestRankCardIndex(hand, vira) {
@@ -278,11 +310,12 @@ function getLowestRankCardIndex(hand, vira) {
 function scheduleRoomTurnPlayTimeout(roomId, gameState) {
   const room = getRoom(roomId);
   const armState = getTurnTimeoutArmState(room, gameState);
+  const timeoutTurnId = armState.turnId || gameState?.turn || null;
   if (!armState.canArm) {
     clearRoomTurnPlayTimer(roomId);
     turnTimerLog("skip-arm", {
       roomId,
-      turn: gameState?.turn || null,
+      turn: timeoutTurnId,
       retryMs: armState.retryMs || 0,
       matchEnded: !!gameState?.matchEnded,
       roundEnding: !!gameState?.roundEnding,
@@ -290,6 +323,7 @@ function scheduleRoomTurnPlayTimeout(roomId, gameState) {
       inputLocked: !!isInputLocked(gameState),
       trucoPending: gameState?.truco?.status === "pending",
       envidoPending: gameState?.envido?.status === "pending",
+      florEnvidoPending: !!isFlorEnvidoPending(gameState),
     });
     clearTurnTimerState(gameState);
     if (armState.retryMs) {
@@ -297,9 +331,10 @@ function scheduleRoomTurnPlayTimeout(roomId, gameState) {
         const retryRoom = getRoom(roomId);
         const retryGame = retryRoom?.gameState;
         if (!retryGame) return;
+        const retryArmState = getTurnTimeoutArmState(retryRoom, retryGame);
         turnTimerLog("retry-arm", {
           roomId,
-          turn: retryGame?.turn || null,
+          turn: retryArmState.turnId || retryGame?.turn || null,
         });
         scheduleRoomTurnPlayTimeout(roomId, retryGame);
         if (
@@ -311,7 +346,7 @@ function scheduleRoomTurnPlayTimeout(roomId, gameState) {
       }, armState.retryMs);
       roomTurnPlayTimers.set(roomId, {
         timeoutId: retryId,
-        turnId: gameState?.turn || null,
+        turnId: timeoutTurnId,
       });
     }
     return;
@@ -321,20 +356,21 @@ function scheduleRoomTurnPlayTimeout(roomId, gameState) {
   const existingEndsAt = Number(gameState?.turnTimer?.endsAt || 0);
   if (
     existing &&
-    existing.turnId === gameState.turn &&
+    existing.turnId === timeoutTurnId &&
     existingEndsAt > Date.now()
   ) {
     turnTimerLog("keep-existing", {
       roomId,
-      turn: gameState.turn,
+      turn: timeoutTurnId,
       endsAt: existingEndsAt,
+      pendingType: armState.pendingType || null,
     });
     return;
   }
 
   clearRoomTurnPlayTimer(roomId);
 
-  const armedTurnId = gameState.turn;
+  const armedTurnId = timeoutTurnId;
   const startedAt = Date.now();
   const endsAt = startedAt + TURN_PLAY_TIMEOUT_MS;
   turnTimerLog("armed", {
@@ -343,6 +379,7 @@ function scheduleRoomTurnPlayTimeout(roomId, gameState) {
     startedAt,
     endsAt,
     durationMs: TURN_PLAY_TIMEOUT_MS,
+    pendingType: armState.pendingType || null,
   });
   gameState.turnTimer = {
     playerId: armedTurnId,
@@ -361,14 +398,11 @@ function scheduleRoomTurnPlayTimeout(roomId, gameState) {
       stateVersion: Number(liveGame?.stateVersion || 0),
       armedVersion,
     });
-    if (!getTurnTimeoutArmState(liveRoom, liveGame).canArm) return;
-    if (liveGame.turn !== armedTurnId) return;
+    const liveArmState = getTurnTimeoutArmState(liveRoom, liveGame);
+    if (!liveArmState.canArm) return;
+    if ((liveArmState.turnId || liveGame.turn) !== armedTurnId) return;
     if (Number(liveGame.turnTimer?.endsAt || 0) !== endsAt) return;
     if (Number(liveGame.stateVersion || 0) < armedVersion) return;
-
-    const hand = liveGame.hands?.[armedTurnId];
-    const cardIndex = getLowestRankCardIndex(hand, liveGame.vira);
-    if (cardIndex < 0) return;
 
     const awayForfeitPlayerId = findAwayPlayerForTimerForfeit(liveGame);
     if (awayForfeitPlayerId) {
@@ -380,6 +414,31 @@ function scheduleRoomTurnPlayTimeout(roomId, gameState) {
       resolveAwayForfeit(roomId, awayForfeitPlayerId, "ausente al vencer timer");
       return;
     }
+
+    if (liveArmState.pendingType === "envido" && liveGame.envido?.status === "pending") {
+      turnTimerLog("auto-reject", { roomId, armedTurnId, pendingType: "envido" });
+      applyEnvidoRejectAction(roomId, liveGame, armedTurnId, "Jugador", true);
+      emitGameUpdate(roomId, liveGame);
+      return;
+    }
+
+    if (liveArmState.pendingType === "truco" && liveGame.truco?.status === "pending") {
+      turnTimerLog("auto-reject", { roomId, armedTurnId, pendingType: "truco" });
+      applyTrucoRejectAction(liveRoom, roomId, liveGame, armedTurnId, "Jugador");
+      emitGameUpdate(roomId, liveRoom.gameState);
+      return;
+    }
+
+    if (liveArmState.pendingType === "flor-envido" && isFlorEnvidoPending(liveGame)) {
+      turnTimerLog("auto-reject", { roomId, armedTurnId, pendingType: "flor-envido" });
+      applyFlorEnvidoRejectAction(roomId, liveGame, armedTurnId, "Jugador");
+      emitGameUpdate(roomId, liveGame);
+      return;
+    }
+
+    const hand = liveGame.hands?.[armedTurnId];
+    const cardIndex = getLowestRankCardIndex(hand, liveGame.vira);
+    if (cardIndex < 0) return;
 
     const playedCount = Math.max(0, 3 - hand.length);
     const faceDown = playedCount >= 1;
@@ -460,7 +519,15 @@ function replacePlayerIdDeep(node, oldId, newId, seen = new WeakMap()) {
   return nextObj;
 }
 
-function reclaimDisconnectedSeat(room, socket, nextPlayerName, reconnectToken, nextAvatarUrl = "") {
+function reclaimDisconnectedSeat(
+  room,
+  socket,
+  nextPlayerName,
+  reconnectToken,
+  nextAvatarUrl = "",
+  nextProfileId = null,
+  nextPlayerUid = null
+) {
   if (!room || !room.gameState || !reconnectToken) return false;
   const disconnected = room.players.find(
     (p) => p.reconnectToken === reconnectToken && p.connected === false
@@ -475,6 +542,8 @@ function reclaimDisconnectedSeat(room, socket, nextPlayerName, reconnectToken, n
   disconnected.name = nextPlayerName || disconnected.name;
   disconnected.reconnectToken = reconnectToken;
   disconnected.avatarUrl = nextAvatarUrl || disconnected.avatarUrl || "";
+  disconnected.profileId = nextProfileId || disconnected.profileId || null;
+  disconnected.playerUid = nextPlayerUid || disconnected.playerUid || null;
   clearSeatTimeout(room.id, oldId);
 
   room.gameState = replacePlayerIdDeep(room.gameState, oldId, newId);
@@ -2814,27 +2883,44 @@ io.on("connection", (socket) => {
     return score;
   }
 
-  function getBotEnvidoAcceptThreshold(pointsInDispute) {
-    if (pointsInDispute <= 2) return 23;
-    if (pointsInDispute <= 4) return 27;
-    if (pointsInDispute <= 6) return 30;
-    if (pointsInDispute <= 9) return 32;
-    return 34;
-  }
+function getBotEnvidoAcceptThreshold(pointsInDispute) {
+  if (pointsInDispute <= 2) return 23;
+  if (pointsInDispute <= 4) return 27;
+  if (pointsInDispute <= 6) return 30;
+  if (pointsInDispute <= 9) return 32;
+  return 34;
+}
 
-  function shouldBotRaiseEnvido(gameState, botId, myEnvido, envido) {
-    if (!envido || envido.status !== "pending") return false;
-    if (envido.callType === "falta") return false;
-    if (isFlorAlreadySung(gameState) || isFlorEnvidoPending(gameState)) return false;
-    if (gameState.handNumber !== 1) return false;
-    if (myEnvido < 33) return false;
+function getBotMatchContext(gameState, botId) {
+  const myTeamKey = getPlayerTeamKey(gameState, botId);
+  const oppTeamKey = myTeamKey === "team1" ? "team2" : "team1";
+  const myPoints = getTeamScoreByKey(gameState, myTeamKey);
+  const oppPoints = getTeamScoreByKey(gameState, oppTeamKey);
+  return {
+    myPoints,
+    oppPoints,
+    lead: myPoints - oppPoints,
+    behind: myPoints < oppPoints,
+    ahead: myPoints > oppPoints,
+    nearFinish: myPoints >= GAME_TARGET - 2 || oppPoints >= GAME_TARGET - 2,
+  };
+}
 
-    const points = Number(envido.points || 2);
-    const maxRaise = points < 10 ? 0.35 : 0.15;
-    const round = getBotRoundContext(gameState, botId);
-    const extraAggro = round.behind ? 0.15 : 0;
-    return Math.random() < maxRaise + extraAggro;
-  }
+function shouldBotRaiseEnvido(gameState, botId, myEnvido, envido) {
+  if (!envido || envido.status !== "pending") return false;
+  if (envido.callType === "falta") return false;
+  if (isFlorAlreadySung(gameState) || isFlorEnvidoPending(gameState)) return false;
+  if (gameState.handNumber !== 1) return false;
+  if (myEnvido < 31) return false;
+
+  const points = Number(envido.points || 2);
+  const maxRaise = points < 10 ? 0.45 : 0.2;
+  const round = getBotRoundContext(gameState, botId);
+  const match = getBotMatchContext(gameState, botId);
+  const extraAggro = round.behind ? 0.15 : 0;
+  const matchAggro = match.behind ? 0.08 : 0;
+  return Math.random() < maxRaise + extraAggro + matchAggro;
+}
 
   function shouldBotCallPrimeroEnvido(gameState, botId, truco) {
     if (!gameState || !truco) return false;
@@ -2870,15 +2956,120 @@ io.on("connection", (socket) => {
     return Math.min(0.16, Math.max(0, base));
   }
 
-  function botWillBluff(gameState, botId, kind = "generic") {
-    return Math.random() < getBotBluffChance(gameState, botId, kind);
-  }
+function botWillBluff(gameState, botId, kind = "generic") {
+  return Math.random() < getBotBluffChance(gameState, botId, kind);
+}
 
-  function chooseBotCardIndex(gameState, botId, hand) {
-    const ranked = getRankedHandInfo(hand, gameState.vira);
-    const lowest = ranked[0]?.index ?? 0;
-    const highest = ranked[ranked.length - 1]?.index ?? 0;
-    const medium = ranked[Math.floor(ranked.length / 2)]?.index ?? lowest;
+function getNextTrucoCallTypeByValue(roundPointValue) {
+  const value = Number(roundPointValue || 1);
+  if (value === 3) return "retruco";
+  if (value === 6) return "vale9";
+  if (value === 9) return "valejuego";
+  return null;
+}
+
+function applyBotTrucoRaiseFromWindow(roomId, gameState, botId, callType, actorFallback = "Bot") {
+  const truco = gameState.truco || {};
+  const canRaiseInWindow =
+    isTrucoRaiseWindowOpen(gameState) &&
+    !!truco.raiseWindowById &&
+    (truco.raiseWindowById === botId || isSameTeam(gameState, truco.raiseWindowById, botId));
+  if (!canRaiseInWindow) return false;
+  if (truco.status === "pending") return false;
+  if (gameState.envido?.status === "pending" || isFlorEnvidoPending(gameState)) return false;
+
+  const callConfig = {
+    retruco: { requiredValue: 3, proposedValue: 6 },
+    vale9: { requiredValue: 6, proposedValue: 9 },
+    valejuego: { requiredValue: 9, proposedValue: 12 },
+  }[callType];
+  if (!callConfig) return false;
+
+  if (Number(gameState.roundPointValue || 1) !== callConfig.requiredValue) return false;
+
+  const acceptedByThisSide =
+    !!truco.acceptedById &&
+    (truco.acceptedById === botId || isSameTeam(gameState, truco.acceptedById, botId));
+  if (!acceptedByThisSide) return false;
+
+  const responderId = getOpposingResponderId(gameState, botId);
+  const responder = gameState.players.find((player) => player.id === responderId);
+  if (!responder) return false;
+
+  gameState.truco = {
+    status: "pending",
+    callerId: botId,
+    responderId: responder.id,
+    callType,
+    proposedValue: callConfig.proposedValue,
+    acceptedById: truco.acceptedById || null,
+    raiseWindowUntil: 0,
+    raiseWindowById: null,
+  };
+
+  const caller = gameState.players.find((player) => player.id === botId);
+  if (caller?.name) {
+    emitLockedMessage(roomId, gameState, `${caller.name}: ${CALL_LABELS[callType] || actorFallback}`);
+  }
+  return true;
+}
+
+function shouldBotRaiseTrucoFromWindow(gameState, botId, hand = []) {
+  const nextCallType = getNextTrucoCallTypeByValue(gameState.roundPointValue);
+  if (!nextCallType) return { raise: false, callType: null };
+
+  const strength = estimateBotTrucoStrength(gameState, botId, hand);
+  const round = getBotRoundContext(gameState, botId);
+  const match = getBotMatchContext(gameState, botId);
+  const thresholdByCall = {
+    retruco: 11.0,
+    vale9: 12.8,
+    valejuego: 14.0,
+  };
+  const baseThreshold = thresholdByCall[nextCallType] || 99;
+  const adjustment = (round.behind ? -0.6 : 0) + (match.behind ? -0.4 : 0) + (match.ahead ? 0.3 : 0);
+  const threshold = baseThreshold + adjustment;
+  const likelyRaise = strength >= threshold;
+  const bluffRaise =
+    !likelyRaise &&
+    strength >= threshold - 1.2 &&
+    botWillBluff(gameState, botId, "raise-truco");
+
+  return {
+    raise: likelyRaise || bluffRaise,
+    callType: nextCallType,
+    strength,
+  };
+}
+
+function shouldBotAcceptFlorEnvido(gameState, botId) {
+  const flor = gameState?.flor || {};
+  const pointsInDispute = Number(flor.florEnvidoPoints || flor.points || 5);
+  const snapshot = gameState.roundHandsSnapshot || gameState.hands || {};
+  const myFlor = computeFlorValue(snapshot[botId] || [], gameState.vira);
+  const round = getBotRoundContext(gameState, botId);
+  const match = getBotMatchContext(gameState, botId);
+
+  let threshold = 29;
+  if (pointsInDispute >= 7) threshold += 2;
+  if (pointsInDispute >= 9) threshold += 1;
+  if (round.behind) threshold -= 1;
+  if (match.behind) threshold -= 1;
+  if (match.ahead && pointsInDispute >= 7) threshold += 1;
+  threshold = Math.max(26, Math.min(34, threshold));
+
+  let wantsAccept = myFlor >= threshold;
+  if (!wantsAccept && myFlor >= threshold - 2 && botWillBluff(gameState, botId, "accept-flor-envido")) {
+    wantsAccept = true;
+  }
+  return { wantsAccept, myFlor, threshold, pointsInDispute };
+}
+
+function chooseBotCardIndex(gameState, botId, hand) {
+  const ranked = getRankedHandInfo(hand, gameState.vira);
+  const lowest = ranked[0]?.index ?? 0;
+  const highest = ranked[ranked.length - 1]?.index ?? 0;
+  const medium = ranked[Math.floor(ranked.length / 2)]?.index ?? lowest;
     const passedCard = ranked.find((item) => item.rank === 0)?.index;
 
     const winning = getCurrentWinningInfo(gameState);
@@ -2893,6 +3084,10 @@ io.on("connection", (socket) => {
       const beatCard = ranked.find((item) => item.rank > winning.bestRank);
       if (!beatCard) return typeof passedCard === "number" ? passedCard : lowest;
 
+      // In critical moments prefer securing the hand with the strongest beating card.
+      const roundNow = getBotRoundContext(gameState, botId);
+      if (roundNow.mustWinNow) return beatCard.index;
+
       // If an opponent still acts after the bot, avoid overcommitting unless needed.
       if (hasOpponentsAfterMe) {
         const saferBeat = ranked.find((item) => item.rank > winning.bestRank && item.rank <= beatCard.rank + 2);
@@ -2903,11 +3098,12 @@ io.on("connection", (socket) => {
 
     const round = getBotRoundContext(gameState, botId);
     if (round.mustWinNow) return highest;
+    if (round.handNumber >= 2 && round.behind) return highest;
     if (round.ahead) return typeof passedCard === "number" ? passedCard : lowest;
     if (round.handNumber === 1 && ranked.length >= 3) return medium;
     if (round.roundPointValue >= 6) return medium;
     return lowest;
-  }
+}
 
   function processBotRoom(room) {
     if (!room?.allowBots || !room.gameState) return;
@@ -2921,11 +3117,23 @@ io.on("connection", (socket) => {
       const pendingSince = ensurePendingSince(gameState.flor);
       if (!canBotResolvePending(roomId, botId, "flor-envido", pendingSince)) return;
       if (!canBotActNow(roomId, botId)) return;
-      applyFlorEnvidoAcceptAction(roomId, gameState, botId, "Bot");
+      const decision = shouldBotAcceptFlorEnvido(gameState, botId);
+      if (decision.wantsAccept) {
+        applyFlorEnvidoAcceptAction(roomId, gameState, botId, "Bot");
+      } else {
+        applyFlorEnvidoRejectAction(roomId, gameState, botId, "Bot");
+      }
       clearBotPendingSchedule(roomId, botId, "flor-envido");
       setBotCooldown(roomId, botId);
       const responder = gameState.players.find((p) => p.id === botId);
-      botLog(roomId, responder?.name, "accept flor-envido");
+      botLog(
+        roomId,
+        responder?.name,
+        "flor-envido response",
+        decision.wantsAccept ? "quiero" : "no quiero",
+        decision.myFlor,
+        decision.threshold
+      );
       emitGameUpdate(roomId, gameState);
       return;
     }
@@ -3050,7 +3258,9 @@ io.on("connection", (socket) => {
       const myEnvido = computeEnvido(snapshot[botId] || [], gameState.vira);
       const threshold = getBotEnvidoAcceptThreshold(envido.points || 2);
       const round = getBotRoundContext(gameState, botId);
-      let wantsAccept = myEnvido >= (round.behind ? threshold - 1 : threshold);
+      const match = getBotMatchContext(gameState, botId);
+      const effectiveThreshold = threshold + (match.ahead ? 1 : 0) - (round.behind || match.behind ? 1 : 0);
+      let wantsAccept = myEnvido >= effectiveThreshold;
       if (!wantsAccept && myEnvido >= threshold - 3 && botWillBluff(gameState, botId, "accept-envido")) {
         wantsAccept = true;
       }
@@ -3095,7 +3305,9 @@ io.on("connection", (socket) => {
       const strength = estimateBotTrucoStrength(gameState, botId, hand);
       const proposed = truco.proposedValue || 3;
       const minStrengthByValue = proposed <= 3 ? 8.5 : proposed <= 6 ? 10.8 : proposed <= 9 ? 12.5 : 13.6;
-      let wantsAccept = strength >= minStrengthByValue;
+      const match = getBotMatchContext(gameState, botId);
+      const adjustedThreshold = minStrengthByValue + (match.ahead ? 0.4 : 0) - (match.behind ? 0.6 : 0);
+      let wantsAccept = strength >= adjustedThreshold;
       if (!wantsAccept && strength >= minStrengthByValue - 1.5 && botWillBluff(gameState, botId, "accept-truco")) {
         wantsAccept = true;
       }
@@ -3104,6 +3316,10 @@ io.on("connection", (socket) => {
         applyTrucoRejectAction(room, roomId, gameState, botId, "Bot");
       } else {
         applyTrucoAcceptAction(roomId, gameState, botId, "Bot");
+        const raiseDecision = shouldBotRaiseTrucoFromWindow(gameState, botId, hand);
+        if (raiseDecision.raise && raiseDecision.callType) {
+          applyBotTrucoRaiseFromWindow(roomId, gameState, botId, raiseDecision.callType, "Bot");
+        }
       }
       clearBotPendingSchedule(roomId, botId, "truco");
       setBotCooldown(roomId, botId);
@@ -3112,7 +3328,25 @@ io.on("connection", (socket) => {
       return;
     }
     if (pendingTruco) return;
-    if (isTrucoRaiseWindowOpen(gameState)) return;
+    if (isTrucoRaiseWindowOpen(gameState)) {
+      const windowOwnerId = gameState.truco?.raiseWindowById;
+      if (isBotPlayerId(windowOwnerId) && (windowOwnerId === gameState.turn || isSameTeam(gameState, windowOwnerId, gameState.turn))) {
+        const botId = windowOwnerId;
+        if (!canBotActNow(roomId, botId)) return;
+        const hand = gameState.hands?.[botId] || [];
+        const raiseDecision = shouldBotRaiseTrucoFromWindow(gameState, botId, hand);
+        if (raiseDecision.raise && raiseDecision.callType) {
+          const didRaise = applyBotTrucoRaiseFromWindow(roomId, gameState, botId, raiseDecision.callType, "Bot");
+          if (didRaise) {
+            setBotCooldown(roomId, botId);
+            botLog(roomId, botId, "raise truco", raiseDecision.callType, raiseDecision.strength);
+            emitGameUpdate(roomId, gameState);
+            return;
+          }
+        }
+      }
+      return;
+    }
 
     if (gameState.firstHandTie && gameState.pardaPhase === "selecting" && isBotPlayerId(gameState.turn)) {
       const botId = gameState.turn;
@@ -3357,13 +3591,17 @@ io.on("connection", (socket) => {
 
   startBotLoopOnce();
 
-  socket.on("room:join", ({ roomId, playerName, reconnectToken, avatarUrl }) => {
+  socket.on("room:join", ({ roomId, playerName, reconnectToken, avatarUrl, profileId, playerUid }) => {
     const currentRoom = socket.data.roomId;
     const nextName = (playerName || "Jugador").trim() || "Jugador";
     const nextAvatarUrl =
       typeof avatarUrl === "string" && /^https?:\/\//i.test(avatarUrl.trim())
         ? avatarUrl.trim()
         : "";
+    const nextProfileId =
+      typeof profileId === "string" && profileId.trim() ? profileId.trim() : null;
+    const nextPlayerUid =
+      typeof playerUid === "string" && playerUid.trim() ? playerUid.trim() : null;
 
     if (currentRoom && currentRoom !== roomId) {
       const oldRoom = removePlayer(currentRoom, socket.id);
@@ -3385,7 +3623,9 @@ io.on("connection", (socket) => {
       socket,
       nextName,
       reconnectToken,
-      nextAvatarUrl
+      nextAvatarUrl,
+      nextProfileId,
+      nextPlayerUid
     );
     if (reclaimed) {
       ensureAwayByPlayer(targetRoom.gameState);
@@ -3416,6 +3656,8 @@ io.on("connection", (socket) => {
       name: nextName,
       reconnectToken: reconnectToken || null,
       avatarUrl: nextAvatarUrl,
+      profileId: nextProfileId,
+      playerUid: nextPlayerUid,
       connected: true,
       lastSeenAt: Date.now(),
     });

@@ -114,6 +114,8 @@ function addPlayer(roomId, player) {
     existingPlayer.connected = typeof player.connected === "boolean" ? player.connected : existingPlayer.connected;
     existingPlayer.lastSeenAt = player.lastSeenAt || Date.now();
     existingPlayer.avatarUrl = player.avatarUrl || "";
+    existingPlayer.profileId = player.profileId || existingPlayer.profileId || null;
+    existingPlayer.playerUid = player.playerUid || existingPlayer.playerUid || null;
     return { ok: true, room };
   }
 

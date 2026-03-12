@@ -12,6 +12,8 @@ function TableStatusPanels({
   isCanto11Active,
   isEnviteActiveDisplay,
   activeEnviteLabelDisplay,
+  isTrucoAwaitingResponse,
+  isEnviteAwaitingResponse,
 }) {
   return (
     <>
@@ -59,7 +61,13 @@ function TableStatusPanels({
           <div className="flex items-center justify-between rounded-md bg-white/80 px-1 py-0.5 sm:px-1.5 sm:py-1">
             <span className="text-[10px] font-semibold text-slate-700 sm:text-xs">{activeTrucoTitle}</span>
             <span
-              className={`inline-block h-4 w-4 rounded-full sm:h-4 sm:w-14 ${isTrucoActive ? "bg-green-700" : "bg-slate-500"}`}
+              className={`inline-block h-4 w-4 rounded-full sm:h-4 sm:w-14 ${
+                isTrucoAwaitingResponse
+                  ? "animate-ping bg-orange-500"
+                  : isTrucoActive
+                    ? "bg-green-700"
+                    : "bg-slate-500"
+              }`}
               title={isTrucoActive ? activeTrucoLabel : "Sin canto"}
               aria-label={isTrucoActive ? activeTrucoLabel : "Sin canto"}
             />
@@ -69,7 +77,13 @@ function TableStatusPanels({
               {enviteTitle}
             </span>
             <span
-              className={`inline-block h-4 w-4 rounded-full sm:h-4 sm:w-14 ${isEnviteActiveDisplay ? "bg-green-700" : "bg-slate-500"}`}
+              className={`inline-block h-4 w-4 rounded-full sm:h-4 sm:w-14 ${
+                isEnviteAwaitingResponse
+                  ? "animate-pulse bg-amber-600"
+                  : isEnviteActiveDisplay
+                    ? "bg-green-700"
+                    : "bg-slate-500"
+              }`}
               title={isEnviteActiveDisplay ? activeEnviteLabelDisplay : "Sin canto"}
               aria-label={isEnviteActiveDisplay ? activeEnviteLabelDisplay : "Sin canto"}
             />

@@ -2,11 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { socket } from "../socket";
 import { getDeckCard, preloadDeckAssets, renderBackCard, renderCard } from "./deck";
 import { resolveMyPlayerId } from "../utils/playerIdentity";
+import { db, isFirebaseConfigured } from "../firebase";
+import { doc, getDoc } from "firebase/firestore";
 import HistoryPanel from "../components/HistoryPanel";
 import FloatingClockButton from "../components/FloatingClockButton";
 import TableStatusPanels from "../components/TableStatusPanels";
 import TestControlsPanel from "../components/TestControlsPanel";
 import RightActionPanel from "../components/RightActionPanel";
+import logo from "../assets/logo.png";
 
 function simplifyPlayerActionMessage(rawMessage) {
   if (typeof rawMessage !== "string") return rawMessage;
@@ -86,7 +89,14 @@ function computeEnvidoClient(cards, vira) {
   return Math.max(bestSingle, bestPair);
 }
 
-function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoomList }) {
+function Mesa({
+  roomId,
+  gameState,
+  myAvatarUrl = "",
+  myEmail = "",
+  myProfile = null,
+  onLeaveToRoomList,
+}) {
   const [state, setState] = useState(gameState);
   const stateRef = useRef(gameState);
   const [message, setMessage] = useState("");
@@ -105,6 +115,9 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
   const [suppressMessagesForMatchEnd, setSuppressMessagesForMatchEnd] = useState(false);
   const [showHistoryPanel, setShowHistoryPanel] = useState(false);
   const [messageHistory, setMessageHistory] = useState([]);
+  const [selectedPlayerForModal, setSelectedPlayerForModal] = useState(null);
+  const [selectedPlayerStats, setSelectedPlayerStats] = useState(null);
+  const [selectedPlayerStatsLoading, setSelectedPlayerStatsLoading] = useState(false);
   const [nowMs, setNowMs] = useState(Date.now());
   const FLOAT_CLOCK_SIZE = 52;
   const FLOAT_CLOCK_EDGE_GAP = 12;
@@ -502,6 +515,68 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
     return idx % 2 === 0 ? "team1" : "team2";
   };
 
+  useEffect(() => {
+    if (!selectedPlayerForModal) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setSelectedPlayerForModal(null);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectedPlayerForModal]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadPlayerStats = async () => {
+      if (!selectedPlayerForModal) {
+        setSelectedPlayerStats(null);
+        setSelectedPlayerStatsLoading(false);
+        return;
+      }
+
+      const isMe = selectedPlayerForModal.id === myPlayerId;
+      const firebaseUid =
+        (isMe ? myProfile?.uid : selectedPlayerForModal.playerUid || selectedPlayerForModal.uid) || null;
+
+      if (!isFirebaseConfigured || !db || !firebaseUid) {
+        setSelectedPlayerStats(null);
+        setSelectedPlayerStatsLoading(false);
+        return;
+      }
+
+      setSelectedPlayerStatsLoading(true);
+      try {
+        const snapshot = await getDoc(doc(db, "players", firebaseUid));
+        if (cancelled) return;
+        if (!snapshot.exists()) {
+          setSelectedPlayerStats(null);
+          return;
+        }
+        const data = snapshot.data() || {};
+        setSelectedPlayerStats({
+          wins: Number(data.wins || 0),
+          losses: Number(data.losses || 0),
+          recentMatches: Array.isArray(data.recentMatches) ? data.recentMatches.slice(0, 5) : [],
+          profileId: data.profileId || null,
+        });
+      } catch {
+        if (!cancelled) {
+          setSelectedPlayerStats(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setSelectedPlayerStatsLoading(false);
+        }
+      }
+    };
+
+    loadPlayerStats();
+    return () => {
+      cancelled = true;
+    };
+  }, [myPlayerId, myProfile?.uid, selectedPlayerForModal]);
+
   const trucoState = state.truco || { status: "idle", callerId: null, responderId: null };
   const isTrucoPending = trucoState.status === "pending";
   const isTrucoResponder =
@@ -545,6 +620,7 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
   const nsTeamSangFlor = nsTeamIds.some((id) => !!florState.sungByPlayer?.[id]);
   const eoTeamSangFlor = eoTeamIds.some((id) => !!florState.sungByPlayer?.[id]);
   const bothTeamsSangFlor = nsTeamSangFlor && eoTeamSangFlor;
+  const isFlorCallPending = (florState.status || "idle") === "pending";
   const pendingCallType = isFlorPending ? "florEnvido" : isTrucoPending ? "truco" : isEnvidoPending ? "envido" : null;
   const isPendingResponder = isTrucoResponder || isEnvidoResponder || isFlorResponder;
   const isPendingCallerWaiting = isTrucoCallerWaiting || isEnvidoCallerWaiting || isFlorCallerWaiting;
@@ -622,6 +698,8 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
   const enviteTitle = isCanto11Active ? "Cantando" : baseEnviteTitle;
   const activeEnviteLabelDisplay = isCanto11Active ? "Estoy cantando" : activeEnviteLabel;
   const isEnviteActiveDisplay = isCanto11Active || isEnviteActive;
+  const isTrucoAwaitingResponse = isTrucoPending;
+  const isEnviteAwaitingResponse = isCanto11Active || isEnvidoPending || isFlorPending || isFlorCallPending;
   const canCallEnvido =
     isMyTurn &&
     envidoState.status === "idle" &&
@@ -681,6 +759,32 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
     const raw = player?.avatarUrl;
     return typeof raw === "string" && /^https?:\/\//i.test(raw.trim()) ? raw.trim() : "";
   };
+  const openPlayerProfileModal = (player) => {
+    if (!player?.id) return;
+    setSelectedPlayerForModal(player);
+  };
+  const selectedStatsData = selectedPlayerStats || { wins: 0, losses: 0, recentMatches: [] };
+  const selectedPlayerIsMe = !!selectedPlayerForModal?.id && selectedPlayerForModal.id === myPlayerId;
+  const selectedWins = selectedPlayerIsMe
+    ? Number(myProfile?.wins ?? selectedStatsData.wins ?? 0)
+    : Number(selectedStatsData.wins || 0);
+  const selectedLosses = selectedPlayerIsMe
+    ? Number(myProfile?.losses ?? selectedStatsData.losses ?? 0)
+    : Number(selectedStatsData.losses || 0);
+  const selectedTotalMatches = selectedWins + selectedLosses;
+  const selectedWinPct = selectedTotalMatches > 0 ? Math.round((selectedWins / selectedTotalMatches) * 100) : 0;
+  const selectedLossPct = selectedTotalMatches > 0 ? 100 - selectedWinPct : 0;
+  const selectedRecentMatches = Array.isArray(
+    selectedStatsData.recentMatches || (selectedPlayerIsMe ? myProfile?.recentMatches : null)
+  )
+    ? (selectedStatsData.recentMatches || myProfile?.recentMatches || []).slice(0, 5)
+    : [];
+  const selectedProfileCode =
+    selectedStatsData.profileId ||
+    selectedPlayerForModal?.profileId ||
+    (selectedPlayerIsMe ? myProfile?.profileId : null) ||
+    selectedPlayerForModal?.id ||
+    "-";
   const activeTurnTimerPlayerId = state?.turnTimer?.playerId || null;
   const activeTurnTimerEndsAt = Number(state?.turnTimer?.endsAt || 0);
   const activeTurnTimerDurationMs = Number(state?.turnTimer?.durationMs || 45000);
@@ -723,8 +827,10 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
             />
           </svg>
         )}
-        <div
-          className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-[#0d6b50] font-bold text-white shadow"
+        <button
+          type="button"
+          onClick={() => openPlayerProfileModal(player)}
+          className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-[#0d6b50] font-bold text-white shadow outline-none transition hover:scale-[1.04] focus-visible:ring-2 focus-visible:ring-emerald-300/80"
         >
           {avatar && !failed ? (
             <img
@@ -742,7 +848,7 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
           ) : (
             (player?.name || fallback).slice(0, 1).toUpperCase()
           )}
-        </div>
+        </button>
       </div>
     );
   };
@@ -1453,11 +1559,16 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
 
   return (
     <div className="relative h-screen overflow-hidden bg-emerald-950 px-14 pt-10 text-white sm:px-6 sm:py-6">
+      <img
+        src={logo}
+        alt="Truco Venezolano"
+        className="pointer-events-none fixed bottom-14 left-3 z-[10] h-24 select-none opacity-50 sm:bottom-16 "
+      />
       <button
         type="button"
         onClick={leaveLobbyNow}
         disabled={isMatchEnded}
-        className={`fixed bottom-3 left-3 z-[115] rounded-full px-4 py-2 text-xs font-semibold shadow-lg transition sm:text-sm ${
+        className={`fixed bottom-3 left-3 z-[10] rounded-full px-4 py-2 text-xs font-semibold shadow-lg transition sm:text-sm ${
           isMatchEnded
             ? "cursor-not-allowed bg-slate-500/80 text-slate-200"
             : "bg-emerald-800/95 text-white hover:bg-emerald-700"
@@ -1548,6 +1659,113 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
           </div>
         </div>
       )}
+      {selectedPlayerForModal && (
+        <div
+          className="fixed inset-0 z-[125] flex items-center justify-center bg-black/60 px-4 [animation:mesaProfileBackdropIn_220ms_ease-out_forwards]"
+          onClick={() => setSelectedPlayerForModal(null)}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl border border-emerald-300/20 bg-emerald-950/95 p-4 text-white shadow-2xl [animation:mesaProfileCardIn_280ms_cubic-bezier(0.16,1,0.3,1)_forwards]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mx-auto flex w-full items-center gap-3 rounded-xl border border-emerald-300/25 bg-emerald-900/25 px-3 py-2.5">
+              <div className="min-w-0 flex-1">
+                <div className="flex gap-2">
+                  <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-emerald-700 text-sm font-bold text-emerald-50">
+                    {getPlayerAvatarUrl(selectedPlayerForModal) &&
+                    !remoteAvatarLoadFailed[selectedPlayerForModal.id] ? (
+                      <img
+                        src={getPlayerAvatarUrl(selectedPlayerForModal)}
+                        alt={selectedPlayerForModal?.name || "Jugador"}
+                        className="h-full w-full object-cover"
+                        referrerPolicy="no-referrer"
+                        onError={() =>
+                          setRemoteAvatarLoadFailed((prev) => ({
+                            ...prev,
+                            [selectedPlayerForModal.id]: true,
+                          }))
+                        }
+                      />
+                    ) : (
+                      (selectedPlayerForModal?.name || "J").slice(0, 1).toUpperCase()
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-emerald-50">
+                      {selectedPlayerForModal?.name || "Jugador"}
+                    </p>
+                    <p className="truncate text-xs text-emerald-200/75">ID: {selectedProfileCode}</p>
+                  </div>
+                </div>
+                <div className="mt-1 grid grid-cols-2 gap-2 text-[11px] text-emerald-100/85">
+                  <span className="rounded-md bg-emerald-900/55 px-2 py-1">Victorias: {selectedWins}</span>
+                  <span className="rounded-md bg-emerald-900/55 px-2 py-1">Derrotas: {selectedLosses}</span>
+                </div>
+              </div>
+              <div className="flex flex-col items-center">
+                <div
+                  className="relative h-11 w-11 rounded-full ring-2 ring-emerald-200/10"
+                  style={{
+                    background: `conic-gradient(from -90deg, #22c55e 0deg ${Math.round(
+                      (selectedWinPct / 100) * 360
+                    )}deg, #ef4444 ${Math.round((selectedWinPct / 100) * 360)}deg 360deg)`,
+                  }}
+                  aria-label={`Victorias ${selectedWinPct}%, derrotas ${selectedLossPct}%`}
+                  title={`Victorias ${selectedWinPct}% / Derrotas ${selectedLossPct}%`}
+                >
+                  <div className="absolute inset-[3px] flex items-center justify-center rounded-full bg-emerald-950 text-[10px] font-bold text-emerald-300">
+                    {selectedWinPct}%
+                  </div>
+                </div>
+                <div className="mt-1 grid grid-cols-2 gap-1 text-[10px]">
+                  <span className="rounded px-0.5 py-1 text-center text-emerald-300">{selectedWins}W</span>
+                  <span className="rounded px-0.5 py-1 text-center text-red-300">{selectedLosses}L</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-emerald-200/85">
+                Ultimos 5 juegos
+              </h4>
+              <div className="mt-2 space-y-1.5">
+                {selectedPlayerStatsLoading ? (
+                  <div className="rounded-md bg-slate-800/60 px-2 py-2 text-center text-xs text-slate-400">
+                    Cargando estadisticas...
+                  </div>
+                ) : selectedRecentMatches.length > 0 ? (
+                  selectedRecentMatches.map((entry, idx) => (
+                    <div
+                      key={`${selectedPlayerForModal.id}-recent-${idx}-${entry.id || entry.endedAt || idx}`}
+                      className="flex items-center justify-between rounded-md bg-emerald-900/35 px-2 py-1.5 text-xs"
+                    >
+                      <span className={entry.result === "W" ? "font-semibold text-emerald-300" : "font-semibold text-rose-300"}>
+                        {entry.result === "W" ? "Ganada" : "Perdida"}
+                      </span>
+                      <span className="text-slate-300">{entry.mode || "1vs1"}</span>
+                      <span className="text-slate-400">
+                        {entry.endedAt ? new Date(entry.endedAt).toLocaleDateString() : "-"}
+                      </span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-md bg-emerald-900/30 px-2 py-2 text-center text-xs text-slate-400">
+                    Sin estadisticas recientes
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setSelectedPlayerForModal(null)}
+              className="mt-4 w-full rounded-lg bg-emerald-700/90 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-600"
+            >
+              Cerrar
+            </button>
+          </div>
+        </div>
+      )}
       <style>{`
         @keyframes mesaMessageFloat {
           0% {
@@ -1599,6 +1817,24 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
             transform: scale(1);
           }
         }
+        @keyframes mesaProfileBackdropIn {
+          0% {
+            opacity: 0;
+          }
+          100% {
+            opacity: 1;
+          }
+        }
+        @keyframes mesaProfileCardIn {
+          0% {
+            opacity: 0;
+            transform: translateY(12px) scale(0.96);
+          }
+          100% {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+        }
       `}</style>
       <HistoryPanel
         open={showHistoryPanel}
@@ -1644,6 +1880,8 @@ function Mesa({ roomId, gameState, myAvatarUrl = "", myEmail = "", onLeaveToRoom
         isCanto11Active={isCanto11Active}
         isEnviteActiveDisplay={isEnviteActiveDisplay}
         activeEnviteLabelDisplay={activeEnviteLabelDisplay}
+        isTrucoAwaitingResponse={isTrucoAwaitingResponse}
+        isEnviteAwaitingResponse={isEnviteAwaitingResponse}
       />
 
       <RightActionPanel
