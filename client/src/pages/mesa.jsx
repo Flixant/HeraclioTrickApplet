@@ -2021,17 +2021,19 @@ function Mesa({
               </div>
             )}
 
-            <div className="absolute inset-x-0 bottom-0 top-[0px] overflow-hidden rounded-[10px] border-2 border-emerald-200/45 bg-[radial-gradient(circle_at_50%_35%,#8fbfa9_0%,#7db49f_45%,#4f9a78_100%)] shadow-[inset_0_0_28px_rgba(255,255,255,0.12),0_24px_48px_rgba(0,0,0,0.45)]">
+            <div className="absolute inset-x-0 bottom-0 top-[0px] rounded-[10px] border-2 border-emerald-200/45 bg-[radial-gradient(circle_at_50%_35%,#8fbfa9_0%,#7db49f_45%,#4f9a78_100%)] shadow-[inset_0_0_28px_rgba(255,255,255,0.12),0_24px_48px_rgba(0,0,0,0.45)]">
               {currentMessage && (
-                <div className="pointer-events-none absolute inset-x-[8%] top-1/2 z-[26] -translate-y-1/2 text-center">
-                  <div
-                    className="mx-auto max-w-full whitespace-normal break-normal text-lg font-semibold leading-tight tracking-[0.02em] text-[#0b1f3a] [animation:mesaMessageFloat_1.6s_ease-in-out_forwards]"
-                    style={{
-                      textShadow:
-                        "0 1px 2px rgba(0,0,0,0.35), 0 2px 6px rgba(0,0,0,0.2)",
-                    }}
-                  >
-                    {currentMessage}
+                <div className="pointer-events-none absolute inset-0 z-[26] overflow-hidden rounded-[10px]">
+                  <div className="absolute inset-x-[8%] top-1/2 -translate-y-1/2 text-center">
+                    <div
+                      className="mx-auto max-w-full whitespace-normal break-normal text-lg font-semibold leading-tight tracking-[0.02em] text-[#0b1f3a] [animation:mesaMessageFloat_1.6s_ease-in-out_forwards]"
+                      style={{
+                        textShadow:
+                          "0 1px 2px rgba(0,0,0,0.35), 0 2px 6px rgba(0,0,0,0.2)",
+                      }}
+                    >
+                      {currentMessage}
+                    </div>
                   </div>
                 </div>
               )}
