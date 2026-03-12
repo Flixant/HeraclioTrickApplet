@@ -260,6 +260,7 @@ function App() {
   const liveRoomIdRef = useRef(roomId);
   const liveGameStateRef = useRef(gameState);
   const livePendingGameStartRef = useRef(pendingGameStart);
+  const skipCountdownOnRejoinRoomRef = useRef(null);
 
   const currentProfile = profile || guestProfile;
   const isGuestMode = !!guestProfile;
@@ -436,8 +437,9 @@ function App() {
       const shouldUseCountdown = shouldUseStartCountdown(nextGameState);
       const countdownAlreadyConsumed =
         Number(countdownConsumedUntilRef.current.get(nextRoomId) || 0) > Date.now();
+      const skipCountdownOnRejoin = skipCountdownOnRejoinRoomRef.current === nextRoomId;
       setRoomId(nextRoomId);
-      if (!alreadyPlayingThisRoom && shouldUseCountdown && !countdownAlreadyConsumed) {
+      if (!alreadyPlayingThisRoom && shouldUseCountdown && !countdownAlreadyConsumed && !skipCountdownOnRejoin) {
         setGameState(null);
         setPendingGameStart((prev) => {
           if (prev?.roomId === nextRoomId) {
@@ -456,6 +458,9 @@ function App() {
       } else {
         setPendingGameStart(null);
         setGameState(nextGameState);
+      }
+      if (skipCountdownOnRejoin) {
+        skipCountdownOnRejoinRoomRef.current = null;
       }
       writeStoredSession({
         ...readStoredSession(),
@@ -483,12 +488,17 @@ function App() {
       const countdownAlreadyConsumed =
         !!targetRoomId &&
         Number(countdownConsumedUntilRef.current.get(targetRoomId) || 0) > Date.now();
+      const skipCountdownOnRejoin =
+        !!targetRoomId && skipCountdownOnRejoinRoomRef.current === targetRoomId;
       const alreadyPlayingThisRoom =
         !!activeGameState &&
         !activeGameState.matchEnded &&
         (!payloadRoomId || payloadRoomId === activeRoomId);
 
-      if (((shouldUseCountdown && !countdownAlreadyConsumed) || hasPendingForRoom) && !alreadyPlayingThisRoom) {
+      if (
+        ((shouldUseCountdown && !countdownAlreadyConsumed && !skipCountdownOnRejoin) || hasPendingForRoom) &&
+        !alreadyPlayingThisRoom
+      ) {
         if (payloadRoomId && activeRoomId !== payloadRoomId) {
           setRoomId(payloadRoomId);
         }
@@ -510,6 +520,9 @@ function App() {
         });
         setGameState(null);
         return;
+      }
+      if (skipCountdownOnRejoin) {
+        skipCountdownOnRejoinRoomRef.current = null;
       }
 
       setPendingGameStart((prev) => {
@@ -706,6 +719,8 @@ function App() {
 
   const joinRoom = (nextRoomId) => {
     if (!effectivePlayerName.trim()) return;
+    const roomSnapshot = rooms.find((room) => room?.id === nextRoomId) || null;
+    skipCountdownOnRejoinRoomRef.current = roomSnapshot?.status === "playing" ? nextRoomId : null;
     setRoomId(nextRoomId);
     writeStoredSession({
       ...readStoredSession(),

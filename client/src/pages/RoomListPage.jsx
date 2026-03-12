@@ -69,50 +69,49 @@ export default function RoomListPage({
           </span>
         </div>
 
-        <div className="mb-3 flex items-center gap-1.5">
-          {seats.map((player, index) => {
-            if (!player) {
-              return (
-                <span
-                  key={`${room.id}-seat-empty-${index}`}
-                  className="h-7 w-7 rounded-full border border-dashed border-emerald-200/25 bg-emerald-950/35"
-                  title="Cupo libre"
-                />
-              );
-            }
-            const safeAvatar =
-              typeof player.avatarUrl === "string" && /^https?:\/\//i.test(player.avatarUrl.trim())
-                ? player.avatarUrl.trim()
-                : "";
-            const isCurrentUserSeat =
-              player.id === socketId ||
-              (!!reconnectToken && player.reconnectToken && player.reconnectToken === reconnectToken);
-            return (
-              <div
-                key={`${room.id}-seat-${player.id || index}`}
-                className={`flex h-7 w-7 items-center justify-center overflow-hidden rounded-full border text-[10px] font-bold ${
-                  isCurrentUserSeat
-                    ? "border-yellow-300 bg-emerald-700 text-yellow-100"
-                    : "border-emerald-200/35 bg-emerald-800 text-emerald-100"
-                }`}
-                title={player.name || "Jugador"}
-              >
-                {safeAvatar ? (
-                  <img
-                    src={safeAvatar}
-                    alt={player.name || "Jugador"}
-                    className="h-full w-full object-cover"
-                    referrerPolicy="no-referrer"
+        <div className="mb-1 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-1.5">
+            {seats.map((player, index) => {
+              if (!player) {
+                return (
+                  <span
+                    key={`${room.id}-seat-empty-${index}`}
+                    className="h-7 w-7 rounded-full border border-dashed border-emerald-200/25 bg-emerald-950/35"
+                    title="Cupo libre"
                   />
-                ) : (
-                  (player.name || "?").slice(0, 1).toUpperCase()
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="flex justify-end">
+                );
+              }
+              const safeAvatar =
+                typeof player.avatarUrl === "string" && /^https?:\/\//i.test(player.avatarUrl.trim())
+                  ? player.avatarUrl.trim()
+                  : "";
+              const isCurrentUserSeat =
+                player.id === socketId ||
+                (!!reconnectToken && player.reconnectToken && player.reconnectToken === reconnectToken);
+              return (
+                <div
+                  key={`${room.id}-seat-${player.id || index}`}
+                  className={`flex h-7 w-7 items-center justify-center overflow-hidden rounded-full border text-[10px] font-bold ${
+                    isCurrentUserSeat
+                      ? "border-yellow-300 bg-emerald-700 text-yellow-100"
+                      : "border-emerald-200/35 bg-emerald-800 text-emerald-100"
+                  }`}
+                  title={player.name || "Jugador"}
+                >
+                  {safeAvatar ? (
+                    <img
+                      src={safeAvatar}
+                      alt={player.name || "Jugador"}
+                      className="h-full w-full object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    (player.name || "?").slice(0, 1).toUpperCase()
+                  )}
+                </div>
+              );
+            })}
+          </div>
           <button
             type="button"
             onClick={() => onJoinRoom(room.id)}
