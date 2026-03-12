@@ -577,7 +577,7 @@ function reclaimDisconnectedSeat(
   disconnected.id = newId;
   disconnected.connected = true;
   disconnected.lastSeenAt = Date.now();
-  disconnected.name = nextPlayerName || disconnected.name;
+  disconnected.name = toPublicPlayerName(nextPlayerName || disconnected.name || "Jugador");
   disconnected.reconnectToken = reconnectToken;
   disconnected.avatarUrl = nextAvatarUrl || disconnected.avatarUrl || "";
   disconnected.profileId = nextProfileId || disconnected.profileId || null;
@@ -592,6 +592,19 @@ function reclaimDisconnectedSeat(
 
 function isBotPlayerId(playerId) {
   return String(playerId || "").startsWith(BOT_PREFIX);
+}
+
+function toPublicPlayerName(rawName) {
+  const cleaned = String(rawName || "")
+    .trim()
+    .replace(/\s+/g, " ");
+  if (!cleaned) return "Jugador";
+  const parts = cleaned.split(" ").filter(Boolean);
+  const firstName = parts[0] || "Jugador";
+  if (parts.length < 2) return firstName;
+  const lastNameInitial = (parts[1] || "").charAt(0).toUpperCase();
+  if (!lastNameInitial) return firstName;
+  return `${firstName} ${lastNameInitial}`;
 }
 
 function botLog(...args) {
@@ -3697,7 +3710,7 @@ function chooseBotCardIndex(gameState, botId, hand) {
 
   socket.on("room:join", ({ roomId, playerName, reconnectToken, avatarUrl, profileId, playerUid }) => {
     const currentRoom = socket.data.roomId;
-    const nextName = (playerName || "Jugador").trim() || "Jugador";
+    const nextName = toPublicPlayerName(playerName || "Jugador");
     const nextAvatarUrl =
       typeof avatarUrl === "string" && /^https?:\/\//i.test(avatarUrl.trim())
         ? avatarUrl.trim()

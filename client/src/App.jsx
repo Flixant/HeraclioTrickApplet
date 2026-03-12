@@ -143,6 +143,19 @@ function getUserDisplayName(user, fallback = "Jugador") {
   return user.displayName || providerName || fallback;
 }
 
+function toPublicDisplayName(rawName, fallback = "") {
+  const cleaned = String(rawName || "")
+    .trim()
+    .replace(/\s+/g, " ");
+  if (!cleaned) return fallback;
+  const parts = cleaned.split(" ").filter(Boolean);
+  const firstName = parts[0] || fallback;
+  if (parts.length < 2) return firstName;
+  const lastNameInitial = (parts[1] || "").charAt(0).toUpperCase();
+  if (!lastNameInitial) return firstName;
+  return `${firstName} ${lastNameInitial}`;
+}
+
 function getUserPhotoURL(user) {
   if (!user) return "";
   const providerPhoto = user.providerData?.find((p) => p?.photoURL)?.photoURL;
@@ -250,7 +263,10 @@ function App() {
 
   const currentProfile = profile || guestProfile;
   const isGuestMode = !!guestProfile;
-  const effectivePlayerName = (currentProfile?.displayName || authUser?.displayName || "").trim();
+  const effectivePlayerName = toPublicDisplayName(
+    currentProfile?.displayName || authUser?.displayName || "",
+    ""
+  );
   const currentRoom = roomId ? rooms.find((room) => room?.id === roomId) || null : null;
   const avatarUrlRaw = profile?.photoURL || getUserPhotoURL(authUser) || "";
   const avatarUrl =
