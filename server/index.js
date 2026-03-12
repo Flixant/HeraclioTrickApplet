@@ -1889,6 +1889,10 @@ io.on("connection", (socket) => {
     const truco = gameState.truco || {};
     const callerId = truco.callerId;
     if (!callerId) return;
+    gameState.truco = {
+      ...truco,
+      lastResolution: "rejected",
+    };
     const reservadaOwnerId = getFlorReservadaOwnerId(gameState);
     const trucoPointWinnerId = reservadaOwnerId || callerId;
     const responder = gameState.players.find((player) => player.id === responderId);
@@ -1948,6 +1952,7 @@ io.on("connection", (socket) => {
     gameState.canto11 = {
       ...canto11,
       status: "resolved",
+      resolution: "privo_truco",
     };
 
     addPoints(gameState, actorId, 1);
@@ -1988,6 +1993,7 @@ io.on("connection", (socket) => {
     gameState.canto11 = {
       ...canto11,
       status: "resolved",
+      resolution: "no_privo",
     };
 
     const me = gameState.players.find((p) => p.id === actorId);

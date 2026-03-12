@@ -649,6 +649,10 @@ function Mesa({
             : "Truco";
   const activeEnviteLabel = isFlorPending
     ? "Flor Envido pendiente"
+    : florState.florEnvidoStatus === "rejected"
+      ? "Flor Envido rechazado"
+      : florState.florEnvidoStatus === "accepted"
+        ? "Flor Envido aceptado"
     : florState.florEnvidoCalled
       ? "Flor Envido cantado"
       : florAlreadySung
@@ -677,11 +681,18 @@ function Mesa({
     Object.values(state.handWinsByPlayer || {}).every((wins) => wins === 0) &&
     (state.tableCards?.length || 0) < playerIds.length;
   const canto11 = state.canto11 || { status: "idle" };
+  const canto11Resolution = String(canto11.resolution || "");
   const isCanto11DuelDeclaring = canto11.status === "duel_declaring";
   const isCanto11DuelResolving = canto11.status === "duel_resolving";
   const isCanto11Declaring = canto11.status === "declaring" || isCanto11DuelDeclaring;
   const isCanto11Responding = canto11.status === "responding";
   const isCanto11Active = isCanto11Declaring || isCanto11Responding || isCanto11DuelResolving;
+  const isCanto11PrivoResolved =
+    canto11.status === "resolved" &&
+    canto11Resolution === "privo_truco" &&
+    (trucoState.status === "pending" || trucoState.status === "accepted");
+  const isCanto11NoPrivoResolved =
+    canto11.status === "resolved" && canto11Resolution === "no_privo";
   const myTeamKey = getPlayerTeamKeyFromTeams(state.teams, myPlayerId, state.players);
   const isCanto11SingerTeam = !!myTeamKey && myTeamKey === canto11.singingTeamKey;
   const isCanto11ResponderTeam = !!myTeamKey && myTeamKey === canto11.responderTeamKey;
@@ -695,11 +706,26 @@ function Mesa({
   const canCanto11Privo = canRespondCanto11 && !!canto11.responderEligible;
   const canCanto11NoPrivo = canRespondCanto11;
   const myCurrentEnvite = computeEnvidoClient(myCards, state.vira);
-  const enviteTitle = isCanto11Active ? "Cantando" : baseEnviteTitle;
-  const activeEnviteLabelDisplay = isCanto11Active ? "Estoy cantando" : activeEnviteLabel;
-  const isEnviteActiveDisplay = isCanto11Active || isEnviteActive;
+  const isCantandoDisplayState =
+    isCanto11Active || isCanto11PrivoResolved || isCanto11NoPrivoResolved;
+  const enviteTitle = isCantandoDisplayState ? "Cantando" : baseEnviteTitle;
+  const activeEnviteLabelDisplay = isCanto11Active
+    ? "Estoy cantando"
+    : isCanto11PrivoResolved
+      ? "Privo y Truco"
+      : isCanto11NoPrivoResolved
+        ? "No Privo"
+        : activeEnviteLabel;
+  const isEnviteActiveDisplay = isCantandoDisplayState || isEnviteActive;
+  const isTrucoRejectedDisplay =
+    String(trucoState.lastResolution || "") === "rejected" ||
+    /no quiero|rechazado/i.test(String(activeTrucoLabel || ""));
+  const isEnviteRejectedDisplay =
+    isCanto11NoPrivoResolved ||
+    /no quiero|rechazado|no privo/i.test(String(activeEnviteLabelDisplay || ""));
   const isTrucoAwaitingResponse = isTrucoPending;
-  const isEnviteAwaitingResponse = isCanto11Active || isEnvidoPending || isFlorPending || isFlorCallPending;
+  const isEnviteAwaitingResponse =
+    isCanto11Active || isEnvidoPending || isFlorPending || isFlorCallPending;
   const canCallEnvido =
     isMyTurn &&
     envidoState.status === "idle" &&
@@ -1882,6 +1908,8 @@ function Mesa({
         activeEnviteLabelDisplay={activeEnviteLabelDisplay}
         isTrucoAwaitingResponse={isTrucoAwaitingResponse}
         isEnviteAwaitingResponse={isEnviteAwaitingResponse}
+        isTrucoRejected={isTrucoRejectedDisplay}
+        isEnviteRejected={isEnviteRejectedDisplay}
       />
 
       <RightActionPanel

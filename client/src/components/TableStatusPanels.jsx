@@ -14,9 +14,17 @@ function TableStatusPanels({
   activeEnviteLabelDisplay,
   isTrucoAwaitingResponse,
   isEnviteAwaitingResponse,
+  isTrucoRejected,
+  isEnviteRejected,
 }) {
   return (
     <>
+      <style>{`
+        @keyframes statusBlinkFast {
+          0%, 100% { background-color: #d97706; }
+          50% { background-color: #92400e; }
+        }
+      `}</style>
       <div className="fixed right-2 top-2 z-50 w-[132px] rounded-lg border border-emerald-200/35 bg-emerald-50/95 p-1 text-slate-800 shadow-[0_8px_18px_rgba(0,0,0,0.3)] sm:right-4 sm:top-4 sm:w-[195px] sm:p-1.5">
         <div className="mb-1 flex items-center justify-between">
           <div className="text-[9px] font-semibold uppercase tracking-[0.08em] text-slate-500 sm:text-[10px] sm:tracking-[0.1em]">
@@ -62,8 +70,10 @@ function TableStatusPanels({
             <span className="text-[10px] font-semibold text-slate-700 sm:text-xs">{activeTrucoTitle}</span>
             <span
               className={`inline-block h-4 w-4 rounded-full sm:h-4 sm:w-14 ${
-                isTrucoAwaitingResponse
-                  ? "animate-ping bg-orange-500"
+                isTrucoRejected
+                  ? "bg-red-600"
+                  : isTrucoAwaitingResponse
+                  ? "bg-amber-600 [animation:statusBlinkFast_800ms_linear_infinite]"
                   : isTrucoActive
                     ? "bg-green-700"
                     : "bg-slate-500"
@@ -78,8 +88,10 @@ function TableStatusPanels({
             </span>
             <span
               className={`inline-block h-4 w-4 rounded-full sm:h-4 sm:w-14 ${
-                isEnviteAwaitingResponse
-                  ? "animate-pulse bg-amber-600"
+                isEnviteRejected
+                  ? "bg-red-600"
+                  : isEnviteAwaitingResponse
+                  ? "bg-amber-600 [animation:statusBlinkFast_800ms_linear_infinite]"
                   : isEnviteActiveDisplay
                     ? "bg-green-700"
                     : "bg-slate-500"
