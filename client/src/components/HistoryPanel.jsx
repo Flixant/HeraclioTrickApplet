@@ -15,8 +15,8 @@ function getHistoryEventMeta(text) {
   if (/\b(quiero|no quiero|privo y truco|no privo|respondio|responde)\b/.test(value)) {
     return {
       label: "Respuesta",
-      badgeClass: "bg-amber-500/20 text-amber-200 border-amber-300/40",
-      cardClass: "border-amber-300/25 bg-amber-900/15",
+      badgeClass: "bg-amber-400/20 text-amber-100 border-amber-300/45",
+      cardClass: "border-amber-300/30 bg-amber-900/20",
     };
   }
   if (
@@ -26,52 +26,54 @@ function getHistoryEventMeta(text) {
   ) {
     return {
       label: "Canto",
-      badgeClass: "bg-fuchsia-500/20 text-fuchsia-200 border-fuchsia-300/40",
-      cardClass: "border-fuchsia-300/25 bg-fuchsia-900/15",
+      badgeClass: "bg-emerald-400/20 text-emerald-100 border-emerald-300/45",
+      cardClass: "border-emerald-300/35 bg-emerald-900/20",
     };
   }
   if (/\b(juega|jugo|carta|pasada|descubrir|descubre|al mazo)\b/.test(value)) {
     return {
       label: "Carta",
-      badgeClass: "bg-sky-500/20 text-sky-200 border-sky-300/40",
-      cardClass: "border-sky-300/25 bg-sky-900/15",
+      badgeClass: "bg-cyan-400/20 text-cyan-100 border-cyan-300/45",
+      cardClass: "border-cyan-300/35 bg-cyan-900/20",
     };
   }
   if (/\b(suma|punto|puntos|gana|total|llego a 12|partida terminada)\b/.test(value)) {
     return {
       label: "Puntos",
-      badgeClass: "bg-emerald-500/20 text-emerald-200 border-emerald-300/40",
-      cardClass: "border-emerald-300/25 bg-emerald-900/15",
+      badgeClass: "bg-yellow-300/20 text-yellow-100 border-yellow-300/45",
+      cardClass: "border-yellow-300/35 bg-yellow-900/20",
     };
   }
   return {
     label: "",
     badgeClass: "",
-    cardClass: "border-slate-300/25 bg-slate-800/70",
+    cardClass: "border-emerald-200/20 bg-emerald-950/55",
   };
 }
 
 function HistoryPanel({ open, entries, onClose }) {
   return (
     <div
-      className={`fixed left-0 top-0 z-[77] h-screen w-[min(84vw,320px)] border-r border-emerald-200/30 bg-slate-900/95 shadow-[0_16px_38px_rgba(0,0,0,0.4)] backdrop-blur-sm transition-transform duration-300 ease-out ${
+      className={`fixed left-0 top-0 z-[77] h-screen w-[min(84vw,340px)] border-r border-emerald-200/50 bg-emerald-900/95 shadow-[0_20px_44px_rgba(0,0,0,0.45)] backdrop-blur-xl transition-transform duration-300 ease-out ${
         open ? "translate-x-0" : "-translate-x-full"
       }`}
     >
       <div className="flex h-full min-h-0 flex-col">
-        <div className="flex items-center justify-between border-b border-emerald-200/20 px-4 py-3">
-          <h3 className="text-sm font-semibold tracking-wide text-emerald-100">Historial de jugadas</h3>
+        <div className="flex items-center justify-between border-b border-emerald-200/15 bg-emerald-900/35 px-4 py-3">
+          <h3 className="bg-gradient-to-r from-[#d8c28a] via-[#bca46b] to-[#8f7a4a] bg-clip-text text-sm font-semibold tracking-wide text-transparent">
+            Historial de jugadas
+          </h3>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md px-2 py-1 text-xs font-semibold text-slate-300 transition hover:bg-slate-700/70 hover:text-white"
+            className="rounded-md border border-emerald-200/20 bg-emerald-900/30 px-2 py-1 text-xs font-semibold text-emerald-100 transition hover:bg-emerald-800/45"
           >
             Cerrar
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2 pr-2">
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3 pr-2">
           {entries.length === 0 ? (
-            <div className="rounded-lg border border-emerald-200/20 bg-slate-800/60 px-3 py-2 text-xs text-slate-300">
+            <div className="rounded-lg border border-emerald-200/20 bg-emerald-900/35 px-3 py-2 text-xs text-emerald-100/75">
               Aun no hay jugadas registradas.
             </div>
           ) : (
@@ -86,28 +88,28 @@ function HistoryPanel({ open, entries, onClose }) {
                 return (
                   <div key={entry.id} className="space-y-1">
                     {startsGroup && (
-                      <div className="rounded-md border border-emerald-300/25 bg-emerald-900/35 px-2 py-1 text-[11px] font-semibold text-emerald-100">
+                      <div className="rounded-md border border-yellow-300/20 bg-yellow-900/15 px-2 py-1 text-[10px] font-semibold text-yellow-100/85">
                         Ronda {entry.round} - Mano {entry.hand}
                       </div>
                     )}
-                    <div className={`rounded-lg border px-2 py-1.5 text-xs text-slate-100 ${meta.cardClass}`}>
+                    <div className={`rounded-md border px-2 py-1.5 text-xs text-emerald-50 ${meta.cardClass}`}>
                       <div className="flex items-center gap-1.5 overflow-hidden whitespace-nowrap">
-                        <span className="shrink-0 text-[10px] font-medium text-slate-400">
+                        <span className="shrink-0 text-[10px] font-medium text-emerald-100/50">
                           {formatHistoryTime(entry.timestamp)}
                         </span>
                         {meta.label ? (
                           <span
-                            className={`shrink-0 inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-semibold ${meta.badgeClass}`}
+                            className={`shrink-0 inline-flex items-center rounded border px-1.5 py-0.5 text-[9px] font-semibold ${meta.badgeClass}`}
                           >
                             {meta.label}
                           </span>
                         ) : null}
                         {playerName ? (
-                          <span className="shrink-0 inline-flex items-center rounded bg-emerald-700 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                          <span className="shrink-0 inline-flex items-center rounded border border-emerald-200/20 bg-emerald-700/55 px-1.5 py-0.5 text-[9px] font-semibold text-white">
                             {playerName}
                           </span>
                         ) : null}
-                        <span className="truncate text-[11px] text-slate-100">{actionText}</span>
+                        <span className="truncate text-[11px] text-emerald-50/92">{actionText}</span>
                       </div>
                     </div>
                   </div>
@@ -122,4 +124,3 @@ function HistoryPanel({ open, entries, onClose }) {
 }
 
 export default HistoryPanel;
-

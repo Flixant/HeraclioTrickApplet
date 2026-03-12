@@ -535,7 +535,31 @@ function Mesa({
         return;
       }
 
-      const isMe = selectedPlayerForModal.id === myPlayerId;
+      const isMe =
+        (!!selectedPlayerForModal?.id && !!myPlayerId && selectedPlayerForModal.id === myPlayerId) ||
+        (!!reconnectToken &&
+          !!selectedPlayerForModal?.reconnectToken &&
+          selectedPlayerForModal.reconnectToken === reconnectToken) ||
+        (!!myProfile?.uid &&
+          !!(selectedPlayerForModal?.playerUid || selectedPlayerForModal?.uid) &&
+          (selectedPlayerForModal.playerUid || selectedPlayerForModal.uid) === myProfile.uid) ||
+        (!!myProfile?.profileId &&
+          !!selectedPlayerForModal?.profileId &&
+          selectedPlayerForModal.profileId === myProfile.profileId);
+
+      if (isMe && myProfile) {
+        setSelectedPlayerStats({
+          wins: Number(myProfile.wins || 0),
+          losses: Number(myProfile.losses || 0),
+          recentMatches: Array.isArray(myProfile.recentMatches)
+            ? myProfile.recentMatches.slice(0, 5)
+            : [],
+          profileId: myProfile.profileId || null,
+        });
+        setSelectedPlayerStatsLoading(false);
+        return;
+      }
+
       const firebaseUid =
         (isMe ? myProfile?.uid : selectedPlayerForModal.playerUid || selectedPlayerForModal.uid) || null;
       const profileId =
@@ -601,7 +625,16 @@ function Mesa({
     return () => {
       cancelled = true;
     };
-  }, [myPlayerId, myProfile?.uid, selectedPlayerForModal]);
+  }, [
+    myPlayerId,
+    myProfile?.uid,
+    myProfile?.profileId,
+    myProfile?.wins,
+    myProfile?.losses,
+    myProfile?.recentMatches,
+    reconnectToken,
+    selectedPlayerForModal,
+  ]);
 
   const trucoState = state.truco || { status: "idle", callerId: null, responderId: null };
   const isTrucoPending = trucoState.status === "pending";
@@ -819,10 +852,16 @@ function Mesa({
   const selectedPlayerIsMe =
     !!selectedPlayerForModal &&
     (
-      (!!selectedPlayerForModal?.id && selectedPlayerForModal.id === myPlayerId) ||
+      (!!selectedPlayerForModal?.id && !!myPlayerId && selectedPlayerForModal.id === myPlayerId) ||
       (!!reconnectToken &&
         !!selectedPlayerForModal?.reconnectToken &&
-        selectedPlayerForModal.reconnectToken === reconnectToken)
+        selectedPlayerForModal.reconnectToken === reconnectToken) ||
+      (!!myProfile?.uid &&
+        !!(selectedPlayerForModal?.playerUid || selectedPlayerForModal?.uid) &&
+        (selectedPlayerForModal.playerUid || selectedPlayerForModal.uid) === myProfile.uid) ||
+      (!!myProfile?.profileId &&
+        !!selectedPlayerForModal?.profileId &&
+        selectedPlayerForModal.profileId === myProfile.profileId)
     );
   const selectedWins = selectedPlayerIsMe
     ? Number(myProfile?.wins ?? selectedStatsData.wins ?? 0)

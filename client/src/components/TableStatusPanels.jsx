@@ -69,7 +69,7 @@ function TableStatusPanels({
           <div className="flex items-center justify-between rounded-md bg-white/80 px-1 py-0.5 sm:px-1.5 sm:py-1">
             <span className="text-[10px] font-semibold text-slate-700 sm:text-xs">{activeTrucoTitle}</span>
             <span
-              className={`inline-block h-4 w-4 rounded-full sm:h-4 sm:w-14 ${
+              className={`inline-block h-4 w-4 rounded-full  ${
                 isTrucoRejected
                   ? "bg-red-600"
                   : isTrucoAwaitingResponse
@@ -87,7 +87,7 @@ function TableStatusPanels({
               {enviteTitle}
             </span>
             <span
-              className={`inline-block h-4 w-4 rounded-full sm:h-4 sm:w-14 ${
+              className={`inline-block h-4 w-4 rounded-full  ${
                 isEnviteRejected
                   ? "bg-red-600"
                   : isEnviteAwaitingResponse
