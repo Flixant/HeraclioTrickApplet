@@ -2528,59 +2528,100 @@ io.on("connection", (socket) => {
     const winnerLabel = getWinnerLabel(gameState, winnerId);
     const roundPoints = gameState.roundPointValue || 1;
     const reservadaOwnerId = getFlorReservadaOwnerId(gameState);
-    const messageQueue = [];
+    const florState = gameState.flor || {};
+    const florRevealPlayerIds = (gameState.players || [])
+      .map((p) => p.id)
+      .filter(
+        (playerId) =>
+          !!florState.hasFlorByPlayer?.[playerId] &&
+          !florState.burnedByPlayer?.[playerId] &&
+          (!!florState.sungByPlayer?.[playerId] || !!florState.reservadaByPlayer?.[playerId])
+      );
+    const appendFlorRevealCardsForPlayer = (targetState, playerId) => {
+      const snapshot = targetState.roundHandsSnapshot || targetState.hands || {};
+      const sourceCards = Array.isArray(snapshot[playerId]) ? snapshot[playerId] : [];
+      if (!sourceCards.length) return false;
+      const existingPlayerRevealKeys = new Set(
+        (targetState.tableCards || [])
+          .filter((card) => !!card?.isFlorReveal && card.playerId === playerId)
+          .map((card) => `${card.value}:${card.suit}`)
+      );
+      let playedAtSeed = Date.now();
+      const cardsToAppend = [];
+      for (const card of sourceCards) {
+        const cardKey = `${card?.value}:${card?.suit}`;
+        if (existingPlayerRevealKeys.has(cardKey)) continue;
+        existingPlayerRevealKeys.add(cardKey);
+        cardsToAppend.push({
+          ...card,
+          playerId,
+          handNumber: targetState.handNumber || 1,
+          isParda: false,
+          isFlorReveal: true,
+          rank: resolveHandRank(card, targetState.vira),
+          playedAt: playedAtSeed,
+        });
+        playedAtSeed += 1;
+      }
+      if (!cardsToAppend.length) return false;
+      targetState.tableCards = [...(targetState.tableCards || []), ...cardsToAppend];
+      return true;
+    };
 
-    if (winnerLabel) {
-      messageQueue.push(`${winnerLabel} gana el truco`);
-    }
+    const finalizeRoundScoring = () => {
+      const messageQueue = [];
 
-    const flor = gameState.flor || {};
-    const reachedThirdHand = (gameState.handNumber || 1) >= 3;
-    const pendingThirdFlorIds = reachedThirdHand
-      ? gameState.players
-          .map((p) => p.id)
-          .filter((playerId) => !!flor.requireThirdByPlayer?.[playerId] && !flor.burnedByPlayer?.[playerId])
-      : [];
-    if (reachedThirdHand) {
-      for (const playerId of pendingThirdFlorIds) {
-        markFlorBurned(gameState, playerId);
-        if (gameState.flor?.requireThirdByPlayer) {
-          gameState.flor.requireThirdByPlayer[playerId] = false;
+      if (winnerLabel) {
+        messageQueue.push(`${winnerLabel} gana el truco`);
+      }
+
+      const flor = gameState.flor || {};
+      const reachedThirdHand = (gameState.handNumber || 1) >= 3;
+      const pendingThirdFlorIds = reachedThirdHand
+        ? gameState.players
+            .map((p) => p.id)
+            .filter((playerId) => !!flor.requireThirdByPlayer?.[playerId] && !flor.burnedByPlayer?.[playerId])
+        : [];
+      if (reachedThirdHand) {
+        for (const playerId of pendingThirdFlorIds) {
+          markFlorBurned(gameState, playerId);
+          if (gameState.flor?.requireThirdByPlayer) {
+            gameState.flor.requireThirdByPlayer[playerId] = false;
+          }
+        }
+        if (pendingThirdFlorIds.length > 0) {
+          const pendingNames = gameState.players
+            .filter((p) => pendingThirdFlorIds.includes(p.id))
+            .map((p) => p.name || "Jugador");
+          messageQueue.push(
+            `${pendingNames.join(" y ")} perdio${pendingNames.length > 1 ? "eron" : ""} la Flor por no confirmarla en tercera`
+          );
         }
       }
-      if (pendingThirdFlorIds.length > 0) {
-        const pendingNames = gameState.players
-          .filter((p) => pendingThirdFlorIds.includes(p.id))
+
+      const burnedByLeyPieIds = gameState.players
+        .map((p) => p.id)
+        .filter((playerId) => gameState.flor?.burnedReasonByPlayer?.[playerId] === "ley_pie");
+      if (burnedByLeyPieIds.length > 0) {
+        const burnedNames = gameState.players
+          .filter((p) => burnedByLeyPieIds.includes(p.id))
           .map((p) => p.name || "Jugador");
         messageQueue.push(
-          `${pendingNames.join(" y ")} perdio${pendingNames.length > 1 ? "eron" : ""} la Flor por no confirmarla en tercera`
+          `${burnedNames.join(" y ")} quemo${burnedNames.length > 1 ? "n" : ""} la flor por jugar a ley siendo pie`
         );
       }
-    }
 
-    const burnedByLeyPieIds = gameState.players
-      .map((p) => p.id)
-      .filter((playerId) => gameState.flor?.burnedReasonByPlayer?.[playerId] === "ley_pie");
-    if (burnedByLeyPieIds.length > 0) {
-      const burnedNames = gameState.players
-        .filter((p) => burnedByLeyPieIds.includes(p.id))
-        .map((p) => p.name || "Jugador");
-      messageQueue.push(
-        `${burnedNames.join(" y ")} quemo${burnedNames.length > 1 ? "n" : ""} la flor por jugar a ley siendo pie`
-      );
-    }
-
-    const florWinnerBurned = !!flor.winnerId && !!gameState.flor?.burnedByPlayer?.[flor.winnerId];
-    if (!flor.resolved) {
-      const florPointsPerWinner = Math.max(3, flor.points || 3);
-      const validFlorPlayerIds = (gameState.players || [])
-        .map((p) => p.id)
-        .filter(
-          (playerId) =>
-            !!flor.hasFlorByPlayer?.[playerId] &&
-            !flor.burnedByPlayer?.[playerId] &&
-            (!!flor.sungByPlayer?.[playerId] || !!flor.reservadaByPlayer?.[playerId])
-        );
+      const florWinnerBurned = !!flor.winnerId && !!gameState.flor?.burnedByPlayer?.[flor.winnerId];
+      if (!flor.resolved) {
+        const florPointsPerWinner = Math.max(3, flor.points || 3);
+        const validFlorPlayerIds = (gameState.players || [])
+          .map((p) => p.id)
+          .filter(
+            (playerId) =>
+              !!flor.hasFlorByPlayer?.[playerId] &&
+              !flor.burnedByPlayer?.[playerId] &&
+              (!!flor.sungByPlayer?.[playerId] || !!flor.reservadaByPlayer?.[playerId])
+          );
 
       if (!reservadaOwnerId && gameState.mode === "2vs2" && validFlorPlayerIds.length > 0) {
         const teamsWithFlor = new Map();
@@ -2677,82 +2718,130 @@ io.on("connection", (socket) => {
       }
     }
 
-    const envido = gameState.envido || {};
-    const hasFlorWinner = !!gameState.flor?.winnerId;
-    const skipEnvidoPointsByFlor = hasFlorWinner && !reservadaOwnerId;
-    if (reservadaOwnerId) {
-      const reservadaOwnerLabel = getWinnerLabel(gameState, reservadaOwnerId);
-      const envidoPoints =
-        envido.status === "accepted" ? Math.max(1, envido.points || 0) : 1;
-      addPoints(gameState, reservadaOwnerId, envidoPoints);
-      const envidoTotal = getTotalPoints(gameState, reservadaOwnerId);
-      messageQueue.push(
-        `${reservadaOwnerLabel} suma ${envidoPoints} punto${envidoPoints > 1 ? "s" : ""} de Envido (total ${envidoTotal})`
-      );
-      gameState.envido = {
-        ...envido,
-        status: envido.status === "accepted" ? "accepted" : "reserved",
-        winnerId: reservadaOwnerId,
-        points: envidoPoints,
-        acceptedPoints: envidoPoints,
-        resolved: true,
-      };
+      const envido = gameState.envido || {};
+      const hasFlorWinner = !!gameState.flor?.winnerId;
+      const skipEnvidoPointsByFlor = hasFlorWinner && !reservadaOwnerId;
+      if (reservadaOwnerId) {
+        const reservadaOwnerLabel = getWinnerLabel(gameState, reservadaOwnerId);
+        const envidoPoints =
+          envido.status === "accepted" ? Math.max(1, envido.points || 0) : 1;
+        addPoints(gameState, reservadaOwnerId, envidoPoints);
+        const envidoTotal = getTotalPoints(gameState, reservadaOwnerId);
+        messageQueue.push(
+          `${reservadaOwnerLabel} suma ${envidoPoints} punto${envidoPoints > 1 ? "s" : ""} de Envido (total ${envidoTotal})`
+        );
+        gameState.envido = {
+          ...envido,
+          status: envido.status === "accepted" ? "accepted" : "reserved",
+          winnerId: reservadaOwnerId,
+          points: envidoPoints,
+          acceptedPoints: envidoPoints,
+          resolved: true,
+        };
 
-      const trucoPoints = gameState.truco?.status === "accepted" ? roundPoints : 1;
-      addPoints(gameState, reservadaOwnerId, trucoPoints);
-      const trucoTotal = getTotalPoints(gameState, reservadaOwnerId);
-      messageQueue.push(
-        `${reservadaOwnerLabel} suma ${trucoPoints} punto${trucoPoints > 1 ? "s" : ""} de Truco (total ${trucoTotal})`
-      );
-    } else {
-      if (
-        !skipEnvidoPointsByFlor &&
-        !envido.resolved &&
-        (envido.status === "accepted" || envido.status === "rejected")
-      ) {
-        const envidoWinnerId = envido.winnerId;
-        const envidoPoints = envido.points || 0;
-        if (envidoWinnerId && envidoPoints > 0) {
-          addPoints(gameState, envidoWinnerId, envidoPoints);
-          const envidoWinnerLabel = getWinnerLabel(gameState, envidoWinnerId);
-          const envidoTotal = getTotalPoints(gameState, envidoWinnerId);
-          messageQueue.push(`${envidoWinnerLabel} gana el envido`);
-          messageQueue.push(
-            `${envidoWinnerLabel} suma ${envidoPoints} punto${envidoPoints > 1 ? "s" : ""} de Envido (total ${envidoTotal})`
-          );
+        const trucoPoints = gameState.truco?.status === "accepted" ? roundPoints : 1;
+        addPoints(gameState, reservadaOwnerId, trucoPoints);
+        const trucoTotal = getTotalPoints(gameState, reservadaOwnerId);
+        messageQueue.push(
+          `${reservadaOwnerLabel} suma ${trucoPoints} punto${trucoPoints > 1 ? "s" : ""} de Truco (total ${trucoTotal})`
+        );
+      } else {
+        if (
+          !skipEnvidoPointsByFlor &&
+          !envido.resolved &&
+          (envido.status === "accepted" || envido.status === "rejected")
+        ) {
+          const envidoWinnerId = envido.winnerId;
+          const envidoPoints = envido.points || 0;
+          if (envidoWinnerId && envidoPoints > 0) {
+            addPoints(gameState, envidoWinnerId, envidoPoints);
+            const envidoWinnerLabel = getWinnerLabel(gameState, envidoWinnerId);
+            const envidoTotal = getTotalPoints(gameState, envidoWinnerId);
+            messageQueue.push(`${envidoWinnerLabel} gana el envido`);
+            messageQueue.push(
+              `${envidoWinnerLabel} suma ${envidoPoints} punto${envidoPoints > 1 ? "s" : ""} de Envido (total ${envidoTotal})`
+            );
+          }
+          gameState.envido = { ...envido, resolved: true };
+        } else if (skipEnvidoPointsByFlor && !envido.resolved) {
+          gameState.envido = { ...envido, resolved: true };
         }
-        gameState.envido = { ...envido, resolved: true };
-      } else if (skipEnvidoPointsByFlor && !envido.resolved) {
-        gameState.envido = { ...envido, resolved: true };
+
+        addPoints(gameState, winnerId, roundPoints);
+        const trucoTotal = getTotalPoints(gameState, winnerId);
+        messageQueue.push(
+          `${winnerLabel} suma ${roundPoints} punto${roundPoints > 1 ? "s" : ""} de Truco (total ${trucoTotal})`
+        );
       }
 
-      addPoints(gameState, winnerId, roundPoints);
-      const trucoTotal = getTotalPoints(gameState, winnerId);
-      messageQueue.push(
-        `${winnerLabel} suma ${roundPoints} punto${roundPoints > 1 ? "s" : ""} de Truco (total ${trucoTotal})`
-      );
+      const matchWinnerId = getMatchWinnerId(gameState);
+      if (matchWinnerId) {
+        const championLabel = getWinnerLabel(gameState, matchWinnerId);
+        messageQueue.push(`${championLabel} gana la partida`);
+        gameState.matchEnded = true;
+        gameState.matchWinnerId = matchWinnerId;
+        gameState.matchEndedAt = Date.now();
+        gameState.rematch = buildRematchState(gameState);
+        room.status = "finished";
+        emitRooms();
+      }
+
+      gameState.roundEnding = true;
+      emitGameUpdate(roomId, gameState);
+      const sequenceDuration = emitMessageSequence(roomId, messageQueue);
+      if (!matchWinnerId) {
+        scheduleRedeal(roomId, Math.max(1800, sequenceDuration + 400));
+      } else {
+        scheduleBotRematchVotes(room, roomId);
+      }
+    };
+
+    if (florRevealPlayerIds.length > 0) {
+      const FLOR_SEQUENCE_STEP_MS = 2400;
+      const FLOR_SHOW_DELAY_MS = 900;
+      const FLOR_POST_DELAY_MS = 1500;
+
+      gameState.roundEnding = true;
+      emitGameUpdate(roomId, gameState);
+      clearRoomMessageTimers(roomId);
+      const timers = [];
+      florRevealPlayerIds.forEach((playerId, index) => {
+        const playerName =
+          (gameState.players || []).find((player) => player.id === playerId)?.name || "Jugador";
+        const startAt = index * FLOR_SEQUENCE_STEP_MS;
+        const messageTimer = setTimeout(() => {
+          const liveRoom = getRoom(roomId);
+          const liveState = liveRoom?.gameState;
+          if (!liveState || !liveState.roundEnding) return;
+          emitLockedMessage(roomId, liveState, `${playerName} muestra Flor`);
+          emitGameUpdate(roomId, liveState);
+        }, startAt);
+        const revealTimer = setTimeout(() => {
+          const liveRoom = getRoom(roomId);
+          const liveState = liveRoom?.gameState;
+          if (!liveState || !liveState.roundEnding) return;
+          const changed = appendFlorRevealCardsForPlayer(liveState, playerId);
+          if (changed) {
+            emitGameUpdate(roomId, liveState);
+          }
+        }, startAt + FLOR_SHOW_DELAY_MS);
+        timers.push(messageTimer, revealTimer);
+      });
+      roomMessageTimers.set(roomId, timers);
+      const preScoreDelayMs =
+        (florRevealPlayerIds.length - 1) * FLOR_SEQUENCE_STEP_MS +
+        FLOR_SHOW_DELAY_MS +
+        FLOR_POST_DELAY_MS;
+      setTimeout(() => {
+        const liveRoom = getRoom(roomId);
+        const liveState = liveRoom?.gameState;
+        if (!liveRoom || !liveState || !liveState.roundEnding) return;
+        finalizeRoundScoring();
+      }, preScoreDelayMs);
+      return;
     }
 
-    const matchWinnerId = getMatchWinnerId(gameState);
-    if (matchWinnerId) {
-      const championLabel = getWinnerLabel(gameState, matchWinnerId);
-      messageQueue.push(`${championLabel} gana la partida`);
-      gameState.matchEnded = true;
-      gameState.matchWinnerId = matchWinnerId;
-      gameState.matchEndedAt = Date.now();
-      gameState.rematch = buildRematchState(gameState);
-      room.status = "finished";
-      emitRooms();
-    }
-
-    gameState.roundEnding = true;
-    emitGameUpdate(roomId, gameState);
-    const sequenceDuration = emitMessageSequence(roomId, messageQueue);
-    if (!matchWinnerId) {
-      scheduleRedeal(roomId, Math.max(1800, sequenceDuration + 400));
-    } else {
-      scheduleBotRematchVotes(room, roomId);
-    }
+    finalizeRoundScoring();
   }
 
   function resolvePardaRound(room, roomId) {

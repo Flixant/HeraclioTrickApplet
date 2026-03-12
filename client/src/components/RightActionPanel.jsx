@@ -77,8 +77,10 @@ export default function RightActionPanel({
     onCallCanto11PrivoTruco,
     onCallCanto11NoPrivo,
     isPendingResponder,
+    pendingCallType,
     onAcceptPendingCall,
     onRejectPendingCall,
+    onRespondWithFlor,
     canCallNextRaise,
     onCallNextRaise,
     isPendingCallerWaiting,
@@ -327,8 +329,10 @@ export default function RightActionPanel({
         onCallCanto11PrivoTruco={onCallCanto11PrivoTruco}
         onCallCanto11NoPrivo={onCallCanto11NoPrivo}
         isPendingResponder={isPendingResponder}
+        pendingCallType={pendingCallType}
         onAcceptPendingCall={onAcceptPendingCall}
         onRejectPendingCall={onRejectPendingCall}
+        onRespondWithFlor={onRespondWithFlor}
         canCallNextRaise={canCallNextRaise}
         onCallNextRaise={onCallNextRaise}
         isPendingCallerWaiting={isPendingCallerWaiting}

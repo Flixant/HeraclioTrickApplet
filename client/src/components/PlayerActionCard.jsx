@@ -15,8 +15,10 @@ function PlayerActionCard({
   onCallCanto11PrivoTruco,
   onCallCanto11NoPrivo,
   isPendingResponder,
+  pendingCallType,
   onAcceptPendingCall,
   onRejectPendingCall,
+  onRespondWithFlor,
   canCallNextRaise,
   onCallNextRaise,
   isPendingCallerWaiting,
@@ -47,6 +49,8 @@ function PlayerActionCard({
   const ringOffset = circumference * (1 - ringProgress);
   const ringColorClass =
     ringProgress <= 0.2 ? "text-rose-500" : ringProgress <= 0.45 ? "text-amber-400" : "text-emerald-400";
+  const canRespondEnvidoWithFlor =
+    isPendingResponder && pendingCallType === "envido" && hasAvailableFlor;
   return (
     <div className="mt-0.5 rounded-lg bg-slate-50 p-2.5 text-slate-700 shadow-[0_8px_18px_rgba(0,0,0,0.35)] sm:p-2">
       <div className="mb-2 flex items-center gap-2 sm:mb-1.5">
@@ -164,14 +168,14 @@ function PlayerActionCard({
               onClick={onAcceptPendingCall}
               className="flex-1 rounded-full bg-emerald-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800 sm:py-1 sm:text-xs"
             >
-              Quiero
+              {canRespondEnvidoWithFlor ? "Quiero al Envido" : "Quiero"}
             </button>
             <button
               type="button"
-              onClick={onRejectPendingCall}
+              onClick={canRespondEnvidoWithFlor ? onRespondWithFlor : onRejectPendingCall}
               className="flex-1 rounded-full bg-gradient-to-r from-emerald-600 to-emerald-800 px-3 py-2 text-sm font-semibold text-white transition hover:from-emerald-700 hover:to-emerald-900 sm:py-1 sm:text-xs"
             >
-              No Quiero
+              {canRespondEnvidoWithFlor ? "Flor" : "No Quiero"}
             </button>
           </>
         ) : (
