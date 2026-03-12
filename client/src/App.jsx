@@ -482,8 +482,6 @@ function App() {
     const counted = readCountedMatches();
     if (counted.includes(fingerprint) || pendingMatchUpdateRef.current.has(fingerprint)) return;
     pendingMatchUpdateRef.current.add(fingerprint);
-    const nextCounted = [...counted, fingerprint].slice(-20);
-    writeCountedMatches(nextCounted);
 
     const iWon =
       gameState.mode === "2vs2"
@@ -520,6 +518,10 @@ function App() {
       );
     })
       .then(() => {
+        const countedNow = readCountedMatches();
+        if (!countedNow.includes(fingerprint)) {
+          writeCountedMatches([...countedNow, fingerprint].slice(-20));
+        }
         setProfile((prev) => {
           if (!prev) return prev;
           const currentRecent = Array.isArray(prev.recentMatches) ? prev.recentMatches : [];
