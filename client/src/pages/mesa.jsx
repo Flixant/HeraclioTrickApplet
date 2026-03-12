@@ -7,7 +7,6 @@ import { collection, doc, getDoc, getDocs, limit, query, where } from "firebase/
 import HistoryPanel from "../components/HistoryPanel";
 import FloatingClockButton from "../components/FloatingClockButton";
 import TableStatusPanels from "../components/TableStatusPanels";
-import TestControlsPanel from "../components/TestControlsPanel";
 import RightActionPanel from "../components/RightActionPanel";
 import logo from "../assets/logo.png";
 
@@ -137,7 +136,6 @@ function Mesa({
   const [showAdvancedCantos, setShowAdvancedCantos] = useState(false);
   const [showAdvancedJugadas, setShowAdvancedJugadas] = useState(false);
   const [showCommunicationCantos, setShowCommunicationCantos] = useState(false);
-  const [showTestPanel, setShowTestPanel] = useState(false);
   const [passCardArmed, setPassCardArmed] = useState(false);
   const [pardaDraft, setPardaDraft] = useState([]);
   const [showEnvidoStoneSlider, setShowEnvidoStoneSlider] = useState(false);
@@ -150,7 +148,6 @@ function Mesa({
   const [messageHistory, setMessageHistory] = useState([]);
   const [micEnabled, setMicEnabled] = useState(false);
   const [voiceSpeakingByPlayer, setVoiceSpeakingByPlayer] = useState({});
-  const [voiceStatus, setVoiceStatus] = useState("idle");
   const [selectedPlayerForModal, setSelectedPlayerForModal] = useState(null);
   const [selectedPlayerStats, setSelectedPlayerStats] = useState(null);
   const [selectedPlayerStatsLoading, setSelectedPlayerStatsLoading] = useState(false);
@@ -468,12 +465,6 @@ function Mesa({
   });
 
   const myCards = state.hands[myPlayerId] || [];
-  const isVoiceDebug = import.meta.env.VITE_VOICE_DEBUG === "true";
-
-  const logVoice = (...args) => {
-    if (!isVoiceDebug) return;
-    console.log("[VOICE]", ...args);
-  };
 
   const ensureVoiceAudioContext = async () => {
     if (typeof window === "undefined") return null;
@@ -545,9 +536,7 @@ function Mesa({
           // ignore
         }
       });
-    } catch (error) {
-      logVoice("meter-error", key, error?.message || error);
-    }
+    } catch {}
   };
 
   const cleanupVoicePeer = (peerId) => {
@@ -596,10 +585,6 @@ function Mesa({
 
     pc.onicecandidate = (event) => {
       if (!event.candidate) return;
-      logVoice("ice-candidate", {
-        to: peerId,
-        candidate: String(event.candidate.candidate || "").slice(0, 80),
-      });
       socket.emit("voice:signal", {
         roomId,
         toId: peerId,
@@ -620,12 +605,10 @@ function Mesa({
       audioEl.srcObject = remoteStream;
       audioEl.play().catch(() => {});
       startVoiceMeter(peerId, remoteStream);
-      logVoice("remote-track", { peerId, tracks: remoteStream.getTracks().length });
     };
 
     pc.onconnectionstatechange = () => {
       const stateValue = pc.connectionState;
-      logVoice("pc-state", { peerId, state: stateValue });
       if (stateValue === "failed" || stateValue === "closed" || stateValue === "disconnected") {
         cleanupVoicePeer(peerId);
       }
@@ -645,10 +628,7 @@ function Mesa({
         toId: peerId,
         description: pc.localDescription,
       });
-      logVoice("offer-sent", { to: peerId });
-    } catch (error) {
-      logVoice("offer-error", { to: peerId, error: error?.message || error });
-    }
+    } catch {}
   };
 
   const handleVoiceSignal = async ({ fromId, description, candidate }) => {
@@ -665,14 +645,11 @@ function Mesa({
             toId: fromId,
             description: pc.localDescription,
           });
-          logVoice("answer-sent", { to: fromId });
         }
       } else if (candidate) {
         await pc.addIceCandidate(new RTCIceCandidate(candidate));
       }
-    } catch (error) {
-      logVoice("signal-error", { fromId, error: error?.message || error });
-    }
+    } catch {}
   };
 
   const stopVoiceSession = (reason = "manual", keepToggle = false) => {
@@ -688,7 +665,6 @@ function Mesa({
     clearVoiceMeter(myPlayerId || socket.id);
     if (!keepToggle) setMicEnabled(false);
     micEnabledRef.current = false;
-    setVoiceStatus(reason);
   };
 
   const toggleVoiceMic = async () => {
@@ -702,7 +678,6 @@ function Mesa({
       (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
     const isSecureAllowed = (typeof window !== "undefined" && window.isSecureContext) || isLocalhost;
     if (!isSecureAllowed) {
-      setVoiceStatus("insecure-context");
       setMessage("Microfono bloqueado: usa HTTPS o localhost");
       if (messageTimeoutRef.current) clearTimeout(messageTimeoutRef.current);
       messageTimeoutRef.current = setTimeout(() => {
@@ -712,7 +687,6 @@ function Mesa({
       return;
     }
     try {
-      setVoiceStatus("requesting-mic");
       const localStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -725,14 +699,10 @@ function Mesa({
       micEnabledRef.current = true;
       await startVoiceMeter(myPlayerId || socket.id, localStream);
       setMicEnabled(true);
-      setVoiceStatus("joining");
       socket.emit("voice:join", { roomId });
-      logVoice("join-requested", { roomId, socketId: socket.id });
     } catch (error) {
       setMicEnabled(false);
       micEnabledRef.current = false;
-      setVoiceStatus("mic-error");
-      logVoice("mic-error", error?.message || error);
       const reason = String(error?.name || error?.message || "permiso denegado");
       setMessage(`No se pudo abrir el microfono (${reason})`);
       if (messageTimeoutRef.current) clearTimeout(messageTimeoutRef.current);
@@ -755,14 +725,12 @@ function Mesa({
     const onVoicePeers = ({ roomId: incomingRoomId, peerIds = [] }) => {
       if (incomingRoomId && incomingRoomId !== roomId) return;
       if (!micEnabledRef.current || !localVoiceStreamRef.current) return;
-      setVoiceStatus("joined");
       peerIds.forEach((peerId) => {
         ensureVoicePeer(peerId);
         if (shouldInitiateWith(peerId)) {
           createVoiceOffer(peerId);
         }
       });
-      logVoice("voice-peers", peerIds);
     };
 
     const onVoicePeerJoined = ({ roomId: incomingRoomId, peerId }) => {
@@ -773,14 +741,12 @@ function Mesa({
       if (shouldInitiateWith(peerId)) {
         createVoiceOffer(peerId);
       }
-      logVoice("peer-joined", peerId);
     };
 
     const onVoicePeerLeft = ({ roomId: incomingRoomId, peerId }) => {
       if (!peerId) return;
       if (incomingRoomId && incomingRoomId !== roomId) return;
       cleanupVoicePeer(peerId);
-      logVoice("peer-left", peerId);
     };
 
     const onVoiceSignal = ({ roomId: incomingRoomId, fromId, description, candidate }) => {
@@ -792,7 +758,6 @@ function Mesa({
     const onVoiceSocketReconnect = () => {
       if (!micEnabledRef.current || !localVoiceStreamRef.current) return;
       socket.emit("voice:join", { roomId });
-      setVoiceStatus("rejoining");
     };
 
     socket.on("voice:peers", onVoicePeers);
@@ -815,13 +780,6 @@ function Mesa({
       stopVoiceSession("unmount", true);
     };
   }, []);
-  const allowedTestEmails = new Set([
-    "frantoima@gmail.com",
-    "fantomcdolibre1@gmail.com",
-    "fantochtron@gmail.com",
-    "antoimahome@gmail.com",
-  ]);
-  const isTestUser = allowedTestEmails.has(String(myEmail || "").trim().toLowerCase());
   const isTwoVsTwo = state.mode === "2vs2" && state.players.length === 4;
   const mySeatIndex = state.players.findIndex((p) => p.id === myPlayerId);
   const safeMySeat = mySeatIndex >= 0 ? mySeatIndex : 0;
@@ -1360,11 +1318,6 @@ function Mesa({
   }));
   const everyoneAnsweredRematch =
     rematchVotes.length > 0 && rematchVotes.every((v) => v.decision === "replay" || v.decision === "exit");
-  const isBastosEspadasMode =
-    Array.isArray(state.deckConfig?.allowedSuits) &&
-    state.deckConfig.allowedSuits.length === 2 &&
-    state.deckConfig.allowedSuits.includes("bastos") &&
-    state.deckConfig.allowedSuits.includes("espadas");
   const viraPositionClassByOffset = isTwoVsTwo
     ? {
         0: "left-4 bottom-4 sm:left-6 sm:bottom-6", // Sur: izquierda del local
@@ -1439,39 +1392,6 @@ function Mesa({
 
   const callCanto11NoPrivo = () => {
     socket.emit("canto11:no-privo", { roomId });
-  };
-
-  const toggleTestDeckMode = () => {
-    socket.emit("debug:set-deck-mode", {
-      roomId,
-      onlyBastosEspadas: !isBastosEspadasMode,
-    });
-  };
-
-  const redealTestRound = () => {
-    socket.emit("debug:redeal-round", { roomId });
-  };
-
-  const forceTestFlor = () => {
-    socket.emit("debug:force-flor", { roomId });
-  };
-
-  const forceTestFlorReservada = () => {
-    socket.emit("debug:force-flor-reservada", { roomId });
-  };
-
-  const setMyScore11 = () => {
-    socket.emit("debug:set-my-score-11", { roomId });
-  };
-
-  const setMyTeamScore11 = () => {
-    socket.emit("debug:set-my-team-score-11", { roomId });
-  };
-  const forceTestPardaFirst = () => {
-    socket.emit("debug:force-parda-first", { roomId });
-  };
-  const forceTestPardaTiebreak2 = () => {
-    socket.emit("debug:force-parda-tiebreak2", { roomId });
   };
 
   const acceptPendingCall = () => {
@@ -2369,21 +2289,6 @@ function Mesa({
         onPointerUp={onFloatingClockPointerUp}
         onClick={onFloatingClockClick}
       />
-      {isTestUser && (
-        <TestControlsPanel
-          isOpen={showTestPanel}
-          onToggleOpen={() => setShowTestPanel((prev) => !prev)}
-          isBastosEspadasMode={isBastosEspadasMode}
-          onToggleTestDeckMode={toggleTestDeckMode}
-          onRedealTestRound={redealTestRound}
-          onForceTestFlor={forceTestFlor}
-          onForceTestFlorReservada={forceTestFlorReservada}
-          onSetMyScore11={setMyScore11}
-          onSetMyTeamScore11={setMyTeamScore11}
-          onForceTestPardaFirst={forceTestPardaFirst}
-          onForceTestPardaTiebreak2={forceTestPardaTiebreak2}
-        />
-      )}
 
       <TableStatusPanels
         nsTeamNames={nsTeamNames}
