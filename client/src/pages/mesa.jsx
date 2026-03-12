@@ -2003,7 +2003,7 @@ function Mesa({
           {currentMessage && (
             <div className="pointer-events-none absolute left-1/2 top-1/2 z-[110] w-[min(92vw,560px)] -translate-x-1/2 -translate-y-1/2 px-4">
               <div
-                className="text-center text-xl font-semibold tracking-[0.02em] text-sky-950 [animation:mesaMessageFloat_1.6s_ease-in-out_forwards] border-1 border-s-slate-800"
+                className="text-center text-xl font-semibold tracking-[0.02em] text-sky-950 [animation:mesaMessageFloat_1.6s_ease-in-out_forwards] border-1 border-slate-100"
               
               >
                 {currentMessage}
