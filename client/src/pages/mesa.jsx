@@ -623,6 +623,17 @@ function Mesa({
 
   const ensureResponderAlertAudioContext = async () => {
     if (typeof window === "undefined") return null;
+    if (voiceAudioContextRef.current) {
+      const sharedCtx = voiceAudioContextRef.current;
+      if (sharedCtx?.state === "suspended") {
+        try {
+          await sharedCtx.resume();
+        } catch {
+          // ignore autoplay-policy resume errors
+        }
+      }
+      return sharedCtx;
+    }
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (!Ctx) return null;
     if (!responderAlertAudioCtxRef.current) {
@@ -645,30 +656,45 @@ function Mesa({
     try {
       const now = ctx.currentTime;
       const master = ctx.createGain();
-      master.gain.setValueAtTime(0.0001, now);
+      master.gain.setValueAtTime(0.001, now);
       master.connect(ctx.destination);
 
-      const scheduleTone = (startAt, frequency, duration) => {
+      const scheduleTone = (startAt, frequency, duration, type = "triangle", peak = 0.35) => {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
-        osc.type = "triangle";
+        osc.type = type;
         osc.frequency.setValueAtTime(frequency, startAt);
-        gain.gain.setValueAtTime(0.0001, startAt);
-        gain.gain.exponentialRampToValueAtTime(0.18, startAt + 0.012);
-        gain.gain.exponentialRampToValueAtTime(0.0001, startAt + duration);
+        gain.gain.setValueAtTime(0.001, startAt);
+        gain.gain.exponentialRampToValueAtTime(peak, startAt + 0.008);
+        gain.gain.exponentialRampToValueAtTime(0.001, startAt + duration);
         osc.connect(gain);
         gain.connect(master);
         osc.start(startAt);
         osc.stop(startAt + duration + 0.02);
       };
 
-      scheduleTone(now, 1046, 0.16);
-      scheduleTone(now + 0.18, 1396, 0.24);
-      master.gain.exponentialRampToValueAtTime(0.0001, now + 0.55);
+      scheduleTone(now, 1175, 0.11, "sine", 0.22);
+      scheduleTone(now + 0.13, 1568, 0.2, "triangle", 0.32);
+      master.gain.exponentialRampToValueAtTime(0.001, now + 0.42);
     } catch {
       // ignore audio synthesis errors
     }
   };
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const unlockAudio = () => {
+      void ensureResponderAlertAudioContext();
+    };
+    window.addEventListener("pointerdown", unlockAudio, { passive: true });
+    window.addEventListener("touchstart", unlockAudio, { passive: true });
+    window.addEventListener("keydown", unlockAudio);
+    return () => {
+      window.removeEventListener("pointerdown", unlockAudio);
+      window.removeEventListener("touchstart", unlockAudio);
+      window.removeEventListener("keydown", unlockAudio);
+    };
+  }, []);
 
   const createVoiceOffer = async (peerId) => {
     try {
