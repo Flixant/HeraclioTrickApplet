@@ -6,6 +6,7 @@ function FloatingClockButton({
   onPointerMove,
   onPointerUp,
   onClick,
+  onDoubleClick,
 }) {
   return (
     <button
@@ -16,6 +17,7 @@ function FloatingClockButton({
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       onClick={onClick}
+      onDoubleClick={onDoubleClick}
       className={`fixed z-[78] flex h-[52px] w-[52px] touch-none select-none items-center justify-center rounded-full border border-emerald-200/30 bg-slate-50/95 text-slate-700 shadow-[0_10px_24px_rgba(0,0,0,0.35)] backdrop-blur-sm hover:bg-slate-200/90 active:scale-95 ${
         isDragging
           ? "transition-none"
@@ -41,4 +43,3 @@ function FloatingClockButton({
 }
 
 export default FloatingClockButton;
-

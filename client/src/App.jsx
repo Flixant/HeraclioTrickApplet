@@ -8,6 +8,7 @@ import { auth, db, googleProvider, isFirebaseConfigured } from "./firebase";
 import { onAuthStateChanged, signInWithPopup, signInWithRedirect, signOut } from "firebase/auth";
 import { doc, getDoc, runTransaction, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
 import { resolveMyPlayerId } from "./utils/playerIdentity";
+import countBeepSrc from "./assets/sound/count-beep.mp3";
 
 const SESSION_STORAGE_KEY = "truco_session_v1";
 const MESA_PATH_PREFIX = "/mesa/";
@@ -233,6 +234,7 @@ function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profile, setProfile] = useState(null);
+  const [countdownAudioReady, setCountdownAudioReady] = useState(false);
   const [guestProfile, setGuestProfile] = useState(() => {
     const saved = readStoredSession();
     if (!saved?.isGuest || !saved?.playerName) return null;
@@ -257,6 +259,8 @@ function App() {
   const myPlayerIdRef = useRef(null);
   const suppressAutoJoinUntilRef = useRef(0);
   const countdownConsumedUntilRef = useRef(new Map());
+  const countdownAudioRef = useRef(null);
+  const lastCountdownBeepRef = useRef(null);
   const liveRoomIdRef = useRef(roomId);
   const liveGameStateRef = useRef(gameState);
   const livePendingGameStartRef = useRef(pendingGameStart);
@@ -375,6 +379,58 @@ function App() {
   }, [pendingGameStart]);
 
   useEffect(() => {
+    if (!countdownAudioRef.current) {
+      countdownAudioRef.current = new Audio(countBeepSrc);
+      countdownAudioRef.current.preload = "auto";
+      countdownAudioRef.current.load();
+    }
+    const audio = countdownAudioRef.current;
+    if (!audio) return undefined;
+
+    const markReady = () => setCountdownAudioReady(true);
+    if (audio.readyState >= 4) {
+      setCountdownAudioReady(true);
+    } else {
+      setCountdownAudioReady(false);
+      audio.addEventListener("canplaythrough", markReady);
+      audio.addEventListener("loadeddata", markReady);
+    }
+
+    return () => {
+      audio.removeEventListener("canplaythrough", markReady);
+      audio.removeEventListener("loadeddata", markReady);
+      audio.pause();
+      audio.currentTime = 0;
+    };
+  }, []);
+
+  useEffect(() => {
+    const countdownValue = Number(pendingGameStart?.countdown || 0);
+    const shouldBeep =
+      !!pendingGameStart?.roomId &&
+      !!pendingGameStart?.showCountdown &&
+      countdownValue > 0 &&
+      countdownValue <= 3;
+
+    if (!shouldBeep) {
+      lastCountdownBeepRef.current = null;
+      return;
+    }
+
+    const beepKey = `${pendingGameStart.roomId}:${countdownValue}`;
+    if (lastCountdownBeepRef.current === beepKey) return;
+    lastCountdownBeepRef.current = beepKey;
+
+    const baseAudio = countdownAudioRef.current;
+    if (!baseAudio) return;
+    try {
+      const audio = baseAudio.cloneNode();
+      audio.currentTime = 0;
+      void audio.play().catch(() => {});
+    } catch {}
+  }, [pendingGameStart?.roomId, pendingGameStart?.showCountdown, pendingGameStart?.countdown]);
+
+  useEffect(() => {
     liveRoomIdRef.current = roomId;
   }, [roomId]);
 
@@ -387,7 +443,7 @@ function App() {
   }, [pendingGameStart]);
 
   useEffect(() => {
-    if (!pendingGameStart?.roomId || pendingGameStart.showCountdown) return undefined;
+    if (!pendingGameStart?.roomId || pendingGameStart.showCountdown || !countdownAudioReady) return undefined;
     const timer = setTimeout(() => {
       setPendingGameStart((prev) => {
         if (!prev || prev.showCountdown) return prev;
@@ -395,7 +451,7 @@ function App() {
       });
     }, 2200);
     return () => clearTimeout(timer);
-  }, [pendingGameStart]);
+  }, [pendingGameStart, countdownAudioReady]);
 
   useEffect(() => {
     function onConnect() {

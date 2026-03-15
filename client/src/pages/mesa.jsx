@@ -10,6 +10,35 @@ import TableStatusPanels from "../components/TableStatusPanels";
 import TestControlsPanel from "../components/TestControlsPanel";
 import RightActionPanel from "../components/RightActionPanel";
 import logo from "../assets/logo.png";
+import cardDropSfx from "../assets/sound/card-drop.mp3";
+import trucoSfx from "../assets/sound/truco-male.mp3";
+import retrucoSfx from "../assets/sound/retruco-male.mp3";
+import valeNueveSfx from "../assets/sound/vale-nueve-male.mp3";
+import valeJuegoSfx from "../assets/sound/vale-juego-male.mp3";
+import primeroEnvidoSfx from "../assets/sound/primero-envido.mp3";
+import faltaEnvidoSfx from "../assets/sound/falta-envido.mp3";
+import florEnvidoSfx from "../assets/sound/flor-envido.mp3";
+import quieroYEnvidoSfx from "../assets/sound/quiero-y-envido.mp3";
+import envidoSfx from "../assets/sound/envido-male.mp3";
+import envido2Sfx from "../assets/sound/envido-2-male.mp3";
+import envido3Sfx from "../assets/sound/envido-3-male.mp3";
+import envido4Sfx from "../assets/sound/envido-4-male.mp3";
+import envido5Sfx from "../assets/sound/envido-5-male.mp3";
+import envido6Sfx from "../assets/sound/envido-6-male.mp3";
+import envido7Sfx from "../assets/sound/envido-7-male.mp3";
+import envido8Sfx from "../assets/sound/envido-8-male.mp3";
+import envido9Sfx from "../assets/sound/envido-9-male.mp3";
+import envido10Sfx from "../assets/sound/envido-10-male.mp3";
+import envido11Sfx from "../assets/sound/envido-11-male.mp3";
+import envido12Sfx from "../assets/sound/envido-12-male.mp3";
+import quieroSfx from "../assets/sound/quiero-male.mp3";
+import noQuieroSfx from "../assets/sound/no-quiero-male.mp3";
+import florSfx from "../assets/sound/flor-male.mp3";
+import conFlorSfx from "../assets/sound/con-flor.mp3";
+import aLeySfx from "../assets/sound/a-ley-male.mp3";
+import privoTrucoSfx from "../assets/sound/privo-truco-male.mp3";
+import noPrivoSfx from "../assets/sound/no-privo-male.mp3";
+import meVoyAlMazoSfx from "../assets/sound/me-voy-al-mazo.mp3";
 
 const DEFAULT_STUN_URLS = ["stun:stun.l.google.com:19302"];
 
@@ -42,6 +71,55 @@ function shouldForceRelay() {
   const raw = String(import.meta.env.VITE_WEBRTC_FORCE_RELAY || "");
   if (!raw) return import.meta.env.PROD;
   return raw === "1" || raw.toLowerCase() === "true";
+}
+
+function resolveRemoteCallSfxKey(rawMessage) {
+  const text = String(rawMessage || "").trim().toLowerCase();
+  if (!text) return null;
+  const envidoStoneMatch = text.match(/^[^:]+:\s*envido\s+(\d+)\s+piedra/);
+  if (envidoStoneMatch) {
+    return resolveEnvidoStoneSfxKey(envidoStoneMatch[1]);
+  }
+  if (/^[^:]+:\s*no quiero(?:\b|[.!])/.test(text)) return "noQuiero";
+  if (/^[^:]+:\s*no privo(?:\b|[.!])/.test(text)) return "noPrivo";
+  if (/^[^:]+:\s*privo y truco(?:\b|[.!])/.test(text)) return "privoTruco";
+  if (/^[^:]+:\s*a ley(?:\b|[.!])/.test(text)) return "aLey";
+  if (/^[^:]+:\s*al mazo(?:\b|[.!])/.test(text)) return "mazo";
+  if (/^[^:]+:\s*quiero y envido(?:\b|[.!])/.test(text)) return "quieroYEnvido";
+  if (
+    /^[^:]+:\s*flor envido(?:\b|[.!])/.test(text)
+  ) {
+    return "florEnvido";
+  }
+  if (
+    /^[^:]+:\s*con flor(?:\b|[.!])/.test(text)
+  ) {
+    return "conFlor";
+  }
+  if (
+    /^[^:]+:\s*flor$/.test(text)
+  ) {
+    return "flor";
+  }
+  if (/^[^:]+:\s*primero envido(?:\b|[.!])/.test(text)) return "primeroEnvido";
+  if (/^[^:]+:\s*falta envido(?:\b|[.!])/.test(text)) return "faltaEnvido";
+  if (
+    /^[^:]+:\s*envido(?:\b|[.!])/.test(text)
+  ) {
+    return "envido";
+  }
+  if (/^[^:]+:\s*vale juego(?:\b|[.!])/.test(text)) return "valeJuego";
+  if (/^[^:]+:\s*vale 9(?:\b|[.!])/.test(text)) return "vale9";
+  if (/^[^:]+:\s*retruco(?:\b|[.!])/.test(text)) return "retruco";
+  if (/^[^:]+:\s*truco(?:\b|[.!])/.test(text)) return "truco";
+  if (/^[^:]+:\s*quiero(?:\b|[.!])/.test(text)) return "quiero";
+  return null;
+}
+
+function resolveEnvidoStoneSfxKey(stones) {
+  const value = Math.max(2, Math.min(12, Math.floor(Number(stones))));
+  if (!Number.isFinite(value) || value <= 2) return "envido";
+  return `envido${value}`;
 }
 
 function simplifyPlayerActionMessage(rawMessage) {
@@ -188,8 +266,12 @@ function Mesa({
   const voiceRemoteAudioByPeerRef = useRef(new Map());
   const voiceMeterCleanupByKeyRef = useRef(new Map());
   const voiceAudioContextRef = useRef(null);
-  const responderAlertAudioCtxRef = useRef(null);
+  const turnDingAudioRef = useRef(null);
+  const cardDropAudioRef = useRef(null);
+  const callAudioMapRef = useRef({});
+  const localCallSfxRef = useRef({ key: "", until: 0 });
   const lastResponderAlertKeyRef = useRef("");
+  const floatingClockClickTimeoutRef = useRef(null);
 
   const clampFloatingClockPos = (x, y) => {
     if (typeof window === "undefined") return { x, y };
@@ -292,6 +374,83 @@ function Mesa({
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined" || typeof Audio === "undefined") return undefined;
+    const audio = new Audio(cardDropSfx);
+    audio.preload = "auto";
+    audio.volume = 0.7;
+    cardDropAudioRef.current = audio;
+    return () => {
+      if (cardDropAudioRef.current) {
+        cardDropAudioRef.current.pause();
+        cardDropAudioRef.current.src = "";
+        cardDropAudioRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof Audio === "undefined") return undefined;
+    const audioMap = {
+      truco: new Audio(trucoSfx),
+      retruco: new Audio(retrucoSfx),
+      vale9: new Audio(valeNueveSfx),
+      valeJuego: new Audio(valeJuegoSfx),
+      primeroEnvido: new Audio(primeroEnvidoSfx),
+      faltaEnvido: new Audio(faltaEnvidoSfx),
+      florEnvido: new Audio(florEnvidoSfx),
+      quieroYEnvido: new Audio(quieroYEnvidoSfx),
+      envido: new Audio(envidoSfx),
+      envido2: new Audio(envido2Sfx),
+      envido3: new Audio(envido3Sfx),
+      envido4: new Audio(envido4Sfx),
+      envido5: new Audio(envido5Sfx),
+      envido6: new Audio(envido6Sfx),
+      envido7: new Audio(envido7Sfx),
+      envido8: new Audio(envido8Sfx),
+      envido9: new Audio(envido9Sfx),
+      envido10: new Audio(envido10Sfx),
+      envido11: new Audio(envido11Sfx),
+      envido12: new Audio(envido12Sfx),
+      quiero: new Audio(quieroSfx),
+      noQuiero: new Audio(noQuieroSfx),
+      flor: new Audio(florSfx),
+      conFlor: new Audio(conFlorSfx),
+      aLey: new Audio(aLeySfx),
+      privoTruco: new Audio(privoTrucoSfx),
+      noPrivo: new Audio(noPrivoSfx),
+      mazo: new Audio(meVoyAlMazoSfx),
+    };
+    Object.values(audioMap).forEach((audio) => {
+      audio.preload = "auto";
+      audio.load();
+    });
+    callAudioMapRef.current = audioMap;
+
+    return () => {
+      Object.values(audioMap).forEach((audio) => {
+        audio.pause();
+        audio.currentTime = 0;
+      });
+      callAudioMapRef.current = {};
+    };
+  }, []);
+
+  const playCallSfx = (key) => {
+    const baseAudio = callAudioMapRef.current?.[key];
+    if (!baseAudio) return;
+    try {
+      const audio = baseAudio.cloneNode();
+      audio.currentTime = 0;
+      void audio.play().catch(() => {});
+    } catch {}
+  };
+
+  const playLocalCallSfx = (key) => {
+    localCallSfxRef.current = { key, until: Date.now() + 1500 };
+    playCallSfx(key);
+  };
+
+  useEffect(() => {
     if (!roomId) return undefined;
     const reportAway = () => {
       const hidden = typeof document !== "undefined" && document.visibilityState !== "visible";
@@ -367,6 +526,7 @@ function Mesa({
     setMessage("");
     setShowEnvidoStoneSlider(false);
     setShowHistoryPanel(false);
+    setShowTestPanel(false);
     setRemoteAvatarLoadFailed({});
     setMatchModalVisible(false);
     setSuppressMessagesForMatchEnd(false);
@@ -400,6 +560,14 @@ function Mesa({
       }
       if (nextTableCount > prevTableCount) {
         const newCards = (nextState.tableCards || []).slice(prevTableCount);
+        const shouldPlayCardDrop = newCards.some((card) => !card?.isFlorReveal && !card?.isEnvidoReveal);
+        if (shouldPlayCardDrop) {
+          const cardDropAudio = cardDropAudioRef.current;
+          if (cardDropAudio) {
+            cardDropAudio.currentTime = 0;
+            cardDropAudio.play().catch(() => {});
+          }
+        }
         newCards.forEach((card) => {
           const playerName =
             (nextState.players || []).find((p) => p.id === card.playerId)?.name || "Jugador";
@@ -427,6 +595,15 @@ function Mesa({
       if (suppressMessagesRef.current) return;
       const raw = typeof payload === "string" ? payload : payload?.message;
       if (!raw) return;
+      const callSfxKey = resolveRemoteCallSfxKey(raw);
+      if (callSfxKey) {
+        const localSuppression = localCallSfxRef.current;
+        const shouldSkipLocalEcho =
+          localSuppression?.key === callSfxKey && Number(localSuppression?.until || 0) > Date.now();
+        if (!shouldSkipLocalEcho) {
+          playCallSfx(callSfxKey);
+        }
+      }
       pushHistoryEntry(raw, stateRef.current);
     }
 
@@ -621,78 +798,57 @@ function Mesa({
     return pc;
   };
 
-  const ensureResponderAlertAudioContext = async () => {
-    if (typeof window === "undefined") return null;
-    if (voiceAudioContextRef.current) {
-      const sharedCtx = voiceAudioContextRef.current;
-      if (sharedCtx?.state === "suspended") {
-        try {
-          await sharedCtx.resume();
-        } catch {
-          // ignore autoplay-policy resume errors
-        }
+  useEffect(() => {
+    return () => {
+      if (floatingClockClickTimeoutRef.current) {
+        clearTimeout(floatingClockClickTimeoutRef.current);
+        floatingClockClickTimeoutRef.current = null;
       }
-      return sharedCtx;
-    }
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) return null;
-    if (!responderAlertAudioCtxRef.current) {
-      responderAlertAudioCtxRef.current = new Ctx();
-    }
-    const ctx = responderAlertAudioCtxRef.current;
-    if (ctx?.state === "suspended") {
-      try {
-        await ctx.resume();
-      } catch {
-        // ignore autoplay-policy resume errors
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof Audio === "undefined") return undefined;
+    const audio = new Audio("/sounds/turn-ding.mp3");
+    audio.preload = "auto";
+    audio.volume = 0.95;
+    turnDingAudioRef.current = audio;
+    return () => {
+      if (turnDingAudioRef.current) {
+        turnDingAudioRef.current.pause();
+        turnDingAudioRef.current.src = "";
+        turnDingAudioRef.current = null;
       }
-    }
-    return ctx;
-  };
-
-  const playResponderTurnDing = async () => {
-    const ctx = await ensureResponderAlertAudioContext();
-    if (!ctx) return;
-    try {
-      const now = ctx.currentTime;
-      const master = ctx.createGain();
-      master.gain.setValueAtTime(0.001, now);
-      master.connect(ctx.destination);
-
-      const scheduleTone = (startAt, frequency, duration, type = "triangle", peak = 0.35) => {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = type;
-        osc.frequency.setValueAtTime(frequency, startAt);
-        gain.gain.setValueAtTime(0.001, startAt);
-        gain.gain.exponentialRampToValueAtTime(peak, startAt + 0.008);
-        gain.gain.exponentialRampToValueAtTime(0.001, startAt + duration);
-        osc.connect(gain);
-        gain.connect(master);
-        osc.start(startAt);
-        osc.stop(startAt + duration + 0.02);
-      };
-
-      scheduleTone(now, 1175, 0.11, "sine", 0.22);
-      scheduleTone(now + 0.13, 1568, 0.2, "triangle", 0.32);
-      master.gain.exponentialRampToValueAtTime(0.001, now + 0.42);
-    } catch {
-      // ignore audio synthesis errors
-    }
-  };
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
-    const unlockAudio = () => {
-      void ensureResponderAlertAudioContext();
+    const primeTurnDing = () => {
+      const audio = turnDingAudioRef.current;
+      if (!audio) return;
+      const previousVolume = audio.volume;
+      audio.volume = 0;
+      audio.play()
+        .then(() => {
+          audio.pause();
+          audio.currentTime = 0;
+          audio.volume = previousVolume;
+        })
+        .catch(() => {
+          audio.volume = previousVolume;
+        });
+      window.removeEventListener("pointerdown", primeTurnDing);
+      window.removeEventListener("touchstart", primeTurnDing);
+      window.removeEventListener("keydown", primeTurnDing);
     };
-    window.addEventListener("pointerdown", unlockAudio, { passive: true });
-    window.addEventListener("touchstart", unlockAudio, { passive: true });
-    window.addEventListener("keydown", unlockAudio);
+    window.addEventListener("pointerdown", primeTurnDing, { passive: true });
+    window.addEventListener("touchstart", primeTurnDing, { passive: true });
+    window.addEventListener("keydown", primeTurnDing);
     return () => {
-      window.removeEventListener("pointerdown", unlockAudio);
-      window.removeEventListener("touchstart", unlockAudio);
-      window.removeEventListener("keydown", unlockAudio);
+      window.removeEventListener("pointerdown", primeTurnDing);
+      window.removeEventListener("touchstart", primeTurnDing);
+      window.removeEventListener("keydown", primeTurnDing);
     };
   }, []);
 
@@ -896,15 +1052,6 @@ function Mesa({
       stopVoiceSession("unmount", true);
     };
   }, []);
-  useEffect(() => {
-    return () => {
-      const ctx = responderAlertAudioCtxRef.current;
-      responderAlertAudioCtxRef.current = null;
-      if (ctx && typeof ctx.close === "function") {
-        ctx.close().catch(() => {});
-      }
-    };
-  }, []);
   const allowedTestEmails = new Set([
     "frantoima@gmail.com",
     "fantomcdolibre1@gmail.com",
@@ -937,9 +1084,14 @@ function Mesa({
 
   const allTableCards = Array.isArray(state.tableCards) ? state.tableCards : [];
   const florRevealCards = allTableCards.filter((card) => !!card?.isFlorReveal);
+  const envidoRevealCards = allTableCards.filter((card) => !!card?.isEnvidoReveal);
   const isFlorRevealMode = !!state.roundEnding && florRevealCards.length > 0;
+  const isEnvidoRevealMode = !isFlorRevealMode && !!state.roundEnding && envidoRevealCards.length > 0;
+  const isTableRevealMode = isFlorRevealMode || isEnvidoRevealMode;
   const normalTableCards = isFlorRevealMode
     ? allTableCards.filter((card) => !card?.isFlorReveal)
+    : isEnvidoRevealMode
+      ? allTableCards.filter((card) => !card?.isEnvidoReveal)
     : allTableCards;
   const myPlayedCards = normalTableCards.filter((card) => card.playerId === myPlayerId);
   const opponentPlayedCards = opponent
@@ -952,14 +1104,24 @@ function Mesa({
     ? normalTableCards.filter((card) => card.playerId === rightPlayer.id)
     : [];
   const myFlorRevealCards = florRevealCards.filter((card) => card.playerId === myPlayerId);
+  const myEnvidoRevealCards = envidoRevealCards.filter((card) => card.playerId === myPlayerId);
   const opponentFlorRevealCards = opponent
     ? florRevealCards.filter((card) => card.playerId === opponent.id)
+    : [];
+  const opponentEnvidoRevealCards = opponent
+    ? envidoRevealCards.filter((card) => card.playerId === opponent.id)
     : [];
   const leftFlorRevealCards = leftPlayer
     ? florRevealCards.filter((card) => card.playerId === leftPlayer.id)
     : [];
+  const leftEnvidoRevealCards = leftPlayer
+    ? envidoRevealCards.filter((card) => card.playerId === leftPlayer.id)
+    : [];
   const rightFlorRevealCards = rightPlayer
     ? florRevealCards.filter((card) => card.playerId === rightPlayer.id)
+    : [];
+  const rightEnvidoRevealCards = rightPlayer
+    ? envidoRevealCards.filter((card) => card.playerId === rightPlayer.id)
     : [];
 
   const roundPointValue = state.roundPointValue ?? 1;
@@ -1348,15 +1510,11 @@ function Mesa({
     }`;
     if (lastResponderAlertKeyRef.current === alertKey) return;
     lastResponderAlertKeyRef.current = alertKey;
-
-    if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
-      try {
-        navigator.vibrate([110, 70, 140]);
-      } catch {
-        // ignore unsupported/blocked vibration calls
-      }
+    const dingAudio = turnDingAudioRef.current;
+    if (dingAudio) {
+      dingAudio.currentTime = 0;
+      dingAudio.play().catch(() => {});
     }
-    void playResponderTurnDing();
   }, [
     isPendingResponder,
     myPlayerId,
@@ -1551,16 +1709,25 @@ function Mesa({
 
   const callNextRaise = () => {
     if (!nextCall) return;
+    const nextCallSfxByEvent = {
+      "call:truco": "truco",
+      "call:retruco": "retruco",
+      "call:vale9": "vale9",
+      "call:valejuego": "valeJuego",
+    };
+    playLocalCallSfx(nextCallSfxByEvent[nextCall.event] || "truco");
     socket.emit(nextCall.event, { roomId });
   };
 
   const callEnvido = (stones = null) => {
     if (myHasAvailableFlor) {
+      playLocalCallSfx("flor");
       socket.emit("call:flor", { roomId });
       return;
     }
     const safeStones =
       Number.isFinite(Number(stones)) ? Math.max(1, Math.min(12, Math.floor(Number(stones)))) : null;
+    playLocalCallSfx(safeStones !== null ? resolveEnvidoStoneSfxKey(safeStones) : "envido");
     socket.emit("call:envido", { roomId, stones: safeStones });
   };
 
@@ -1569,10 +1736,12 @@ function Mesa({
   };
 
   const callCanto11PrivoTruco = () => {
+    playLocalCallSfx("privoTruco");
     socket.emit("canto11:privo-truco", { roomId });
   };
 
   const callCanto11NoPrivo = () => {
+    playLocalCallSfx("noPrivo");
     socket.emit("canto11:no-privo", { roomId });
   };
 
@@ -1599,6 +1768,10 @@ function Mesa({
     socket.emit("debug:set-my-score-11", { roomId });
   };
 
+  const setOpponentScore11 = () => {
+    socket.emit("debug:set-opponent-score-11", { roomId });
+  };
+
   const setMyTeamScore11 = () => {
     socket.emit("debug:set-my-team-score-11", { roomId });
   };
@@ -1608,52 +1781,142 @@ function Mesa({
   const forceTestPardaTiebreak2 = () => {
     socket.emit("debug:force-parda-tiebreak2", { roomId });
   };
+  const previewEnvidoTable = () => {
+    socket.emit("debug:preview-envido-table", { roomId });
+  };
+  const previewFlorTable = () => {
+    socket.emit("debug:preview-flor-table", { roomId });
+  };
+
+  const testCallTruco = () => {
+    playLocalCallSfx("truco");
+    socket.emit("call:truco", { roomId });
+  };
+  const testCallRetruco = () => {
+    playLocalCallSfx("retruco");
+    socket.emit("call:retruco", { roomId });
+  };
+  const testCallVale9 = () => {
+    playLocalCallSfx("vale9");
+    socket.emit("call:vale9", { roomId });
+  };
+  const testCallValeJuego = () => {
+    playLocalCallSfx("valeJuego");
+    socket.emit("call:valejuego", { roomId });
+  };
+  const testCallEnvido = () => {
+    playLocalCallSfx("envido");
+    socket.emit("call:envido", { roomId });
+  };
+  const testCallPrimeroEnvido = () => {
+    playLocalCallSfx("primeroEnvido");
+    socket.emit("call:primero-envido", { roomId });
+  };
+  const testCallFaltaEnvido = () => {
+    playLocalCallSfx("faltaEnvido");
+    socket.emit("call:falta-envido", { roomId });
+  };
+  const testAcceptCall = () => {
+    playLocalCallSfx("quiero");
+    socket.emit("truco:accept", { roomId });
+    socket.emit("envido:accept", { roomId });
+    socket.emit("flor-envido:accept", { roomId });
+  };
+  const testRejectCall = () => {
+    playLocalCallSfx("noQuiero");
+    socket.emit("truco:reject", { roomId });
+    socket.emit("envido:reject", { roomId });
+    socket.emit("flor-envido:reject", { roomId });
+  };
+  const testRaiseEnvido = () => {
+    playLocalCallSfx("quieroYEnvido");
+    socket.emit("envido:raise", { roomId, kind: "envido" });
+    socket.emit("flor-envido:raise", { roomId });
+  };
+  const testCallFlor = () => {
+    playLocalCallSfx("flor");
+    socket.emit("call:flor", { roomId });
+  };
+  const testConFlor = () => {
+    playLocalCallSfx("conFlor");
+    socket.emit("flor:con-flor", { roomId });
+  };
+  const testCallFlorEnvido = () => {
+    playLocalCallSfx("florEnvido");
+    socket.emit("call:flor-envido", { roomId });
+  };
+  const testCallPrivoTruco = () => {
+    playLocalCallSfx("privoTruco");
+    socket.emit("canto11:privo-truco", { roomId });
+  };
+  const testCallNoPrivo = () => {
+    playLocalCallSfx("noPrivo");
+    socket.emit("canto11:no-privo", { roomId });
+  };
+  const testPlayLey = () => {
+    playLocalCallSfx("aLey");
+    socket.emit("flor:jugar-ley", { roomId });
+  };
+  const testGoMazo = () => {
+    playLocalCallSfx("mazo");
+    socket.emit("play:mazo", { roomId });
+  };
 
   const acceptPendingCall = () => {
     if (pendingCallType === "florEnvido") {
+      playLocalCallSfx("quiero");
       socket.emit("flor-envido:accept", { roomId });
       return;
     }
     if (pendingCallType === "truco") {
+      playLocalCallSfx("quiero");
       socket.emit("truco:accept", { roomId });
       return;
     }
     if (pendingCallType === "envido") {
+      playLocalCallSfx("quiero");
       socket.emit("envido:accept", { roomId });
     }
   };
 
   const rejectPendingCall = () => {
     if (pendingCallType === "florEnvido") {
+      playLocalCallSfx("noQuiero");
       socket.emit("flor-envido:reject", { roomId });
       return;
     }
     if (pendingCallType === "truco") {
+      playLocalCallSfx("noQuiero");
       socket.emit("truco:reject", { roomId });
       return;
     }
     if (pendingCallType === "envido") {
+      playLocalCallSfx("noQuiero");
       socket.emit("envido:reject", { roomId });
     }
   };
 
   const raiseEnvido = (kind = "envido", stones = null) => {
     if (pendingCallType === "florEnvido" && kind === "envido" && isPendingResponder) {
+      playLocalCallSfx("quieroYEnvido");
       socket.emit("flor-envido:raise", { roomId });
       return;
     }
 
     if (kind === "falta") {
       if (isPendingResponder && pendingCallType === "envido") {
+        playLocalCallSfx("faltaEnvido");
         socket.emit("envido:raise", { roomId, kind: "falta" });
         return;
       }
       if (envidoState.status === "idle" && isInFirstHand && !isTrucoPending && !isEnvidoPending && !isFlorPending) {
+        playLocalCallSfx("faltaEnvido");
         socket.emit("call:falta-envido", { roomId });
       }
       return;
     }
 
+    playLocalCallSfx(stones != null ? resolveEnvidoStoneSfxKey(stones) : "envido");
     socket.emit("envido:raise", { roomId, kind, stones });
   };
   const canUseAdvancedEnvido =
@@ -1703,6 +1966,7 @@ function Mesa({
     !state.pardaSelections?.[myPlayerId]?.revealedBottom;
 
   const callPrimeroEnvido = () => {
+    playLocalCallSfx("primeroEnvido");
     socket.emit("call:primero-envido", { roomId });
   };
   const revealPardaCard = () => {
@@ -1729,18 +1993,22 @@ function Mesa({
   };
 
   const respondConFlor = () => {
+    playLocalCallSfx("conFlor");
     socket.emit("flor:con-flor", { roomId });
   };
 
   const playLey = () => {
+    playLocalCallSfx("aLey");
     socket.emit("flor:jugar-ley", { roomId });
   };
 
   const goMazo = () => {
+    playLocalCallSfx("mazo");
     socket.emit("play:mazo", { roomId });
   };
 
   const callFlorEnvido = () => {
+    playLocalCallSfx("florEnvido");
     socket.emit("call:flor-envido", { roomId });
   };
 
@@ -1856,9 +2124,7 @@ function Mesa({
     }
     const stackCount = cards.length;
     const stackSize = offsets.length ? Math.max(...offsets) : 0;
-    const stackStart = fromNorth && stackAxis === "y"
-      ? (index) => stackSize - offsets[index]
-      : (index) => offsets[index];
+    const stackStart = (index) => offsets[index];
     const containerStyle =
       stackAxis === "x"
         ? { width: `${78 + stackSize}px`, height: "76px" }
@@ -1870,7 +2136,7 @@ function Mesa({
           const offset = stackStart(index);
           const zIndex = index + 1;
           let xOffset = stackAxis === "x" ? offset * stackSign : 0;
-          let yOffset = stackAxis === "y" ? offset : 0;
+          let yOffset = stackAxis === "y" ? (fromNorth ? -offset : offset) : 0;
           const revealGapShift = card?.pardaPair && card?.pardaLayer === "top" && card?.pardaRevealGap ? 20 : 0;
           if (revealGapShift > 0) {
             if (stackAxis === "x") xOffset += revealGapShift * stackSign;
@@ -1926,6 +2192,76 @@ function Mesa({
               style={{
                 marginLeft: `${xOffset}px`,
                 transform: `translateX(-50%) translateY(${yOffset}px) rotate(${totalRotate}deg)`,
+                zIndex: total - index,
+              }}
+            >
+              {renderDeckCardOrFallback(card)}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const renderSideFan = (cards, side = "left") => {
+    const total = cards.length;
+    if (!total) return null;
+    const center = (total - 1) / 2;
+    const isLeft = side === "left";
+    const spread = Math.min(56, 30 + total * 9);
+
+    return (
+      <div className="relative h-[130px] w-[96px]">
+        {cards.map((card, index) => {
+          const angleStep = total > 1 ? spread / (total - 1) : 0;
+          const angle = -spread / 2 + angleStep * index;
+          const rel = index - center;
+          const yOffset = Math.round(rel * 22);
+          const xOffset = Math.round((10 - Math.abs(rel) * 3) * (isLeft ? -1 : 1));
+          const rotation = isLeft ? 90 + angle : -90 - angle;
+          return (
+            <div
+              key={`${card.playerId}-${card.value}-${card.suit}-${index}`}
+              className="absolute left-1/2 top-1/2"
+              style={{
+                transform: `translate(-50%, -50%) translate(${xOffset}px, ${yOffset}px) rotate(${rotation}deg)`,
+                zIndex: index + 1,
+              }}
+            >
+              {renderDeckCardOrFallback(card)}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const renderSideReveal = (cards, side = "left") => {
+    const total = cards.length;
+    if (!total) return null;
+    const center = (total - 1) / 2;
+    const isLeft = side === "left";
+    const spread = Math.min(56, 30 + total * 9);
+
+    return (
+      <div className="relative h-[132px] w-[96px]">
+        {cards.map((card, index) => {
+          const angleStep = total > 1 ? spread / (total - 1) : 0;
+          const angle = -spread / 2 + angleStep * index;
+          const rel = index - center;
+          const centerDist = Math.abs(index - center);
+          const maxDist = center || 1;
+          const arcFactor = 1 - centerDist / maxDist;
+          const arcPx = Math.round(arcFactor * 12);
+          const yOffset = Math.round((index - center) * 22);
+          const xOffset = isLeft ? arcPx : -arcPx;
+          const rotation = isLeft ? 90 + angle : -90 - angle;
+          return (
+            <div
+              key={`${card.playerId}-${card.suit}-${card.value}-${index}`}
+              className="absolute left-1/2 top-1/2"
+              style={{
+                transform: `translate(-50%, -50%) translate(${xOffset}px, ${yOffset}px) rotate(${rotation}deg)`,
                 zIndex: total - index,
               }}
             >
@@ -2093,7 +2429,30 @@ function Mesa({
       event.stopPropagation();
       return;
     }
-    setShowHistoryPanel((prev) => !prev);
+    if (floatingClockClickTimeoutRef.current) {
+      clearTimeout(floatingClockClickTimeoutRef.current);
+      floatingClockClickTimeoutRef.current = null;
+    }
+    floatingClockClickTimeoutRef.current = setTimeout(() => {
+      setShowHistoryPanel((prev) => !prev);
+      floatingClockClickTimeoutRef.current = null;
+    }, 220);
+  };
+
+  const onFloatingClockDoubleClick = (event) => {
+    const drag = floatingClockDragRef.current;
+    if (drag.suppressClick) {
+      drag.suppressClick = false;
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (floatingClockClickTimeoutRef.current) {
+      clearTimeout(floatingClockClickTimeoutRef.current);
+      floatingClockClickTimeoutRef.current = null;
+    }
+    if (!isTestUser) return;
+    setShowTestPanel(true);
   };
 
   const rightPanelEnvidoStone = {
@@ -2505,20 +2864,41 @@ function Mesa({
         onPointerMove={onFloatingClockPointerMove}
         onPointerUp={onFloatingClockPointerUp}
         onClick={onFloatingClockClick}
+        onDoubleClick={onFloatingClockDoubleClick}
       />
       {isTestUser && (
         <TestControlsPanel
           isOpen={showTestPanel}
-          onToggleOpen={() => setShowTestPanel((prev) => !prev)}
+          onClose={() => setShowTestPanel(false)}
           isBastosEspadasMode={isBastosEspadasMode}
+          onPreviewEnvidoTable={previewEnvidoTable}
+          onPreviewFlorTable={previewFlorTable}
           onToggleTestDeckMode={toggleTestDeckMode}
           onRedealTestRound={redealTestRound}
           onForceTestFlor={forceTestFlor}
           onForceTestFlorReservada={forceTestFlorReservada}
           onSetMyScore11={setMyScore11}
+          onSetOpponentScore11={setOpponentScore11}
           onSetMyTeamScore11={setMyTeamScore11}
           onForceTestPardaFirst={forceTestPardaFirst}
           onForceTestPardaTiebreak2={forceTestPardaTiebreak2}
+          onTestCallTruco={testCallTruco}
+          onTestCallRetruco={testCallRetruco}
+          onTestCallVale9={testCallVale9}
+          onTestCallValeJuego={testCallValeJuego}
+          onTestCallEnvido={testCallEnvido}
+          onTestCallPrimeroEnvido={testCallPrimeroEnvido}
+          onTestCallFaltaEnvido={testCallFaltaEnvido}
+          onTestAccept={testAcceptCall}
+          onTestReject={testRejectCall}
+          onTestRaiseEnvido={testRaiseEnvido}
+          onTestCallFlor={testCallFlor}
+          onTestConFlor={testConFlor}
+          onTestCallFlorEnvido={testCallFlorEnvido}
+          onTestCallPrivoTruco={testCallPrivoTruco}
+          onTestCallNoPrivo={testCallNoPrivo}
+          onTestPlayLey={testPlayLey}
+          onTestGoMazo={testGoMazo}
         />
       )}
 
@@ -2556,20 +2936,20 @@ function Mesa({
             <div className="absolute left-1/2 top-[-74px] z-30 -translate-x-1/2 text-center sm:top-[-100px]">
               {renderSeatAvatar(opponent, "R", "h-9 w-9 text-sm")}
 
-              {!isFlorRevealMode && renderFanHand(opponentCards, { fromNorth: true })}
+              {!isTableRevealMode && renderFanHand(opponentCards, { fromNorth: true })}
             </div>
 
             {isTwoVsTwo && (
               <div className="absolute left-[-46px] top-1/2 z-30 -translate-y-1/2 text-center sm:left-[-70px]">
                 {renderSeatAvatar(leftPlayer, "L", "h-8 w-8 text-xs")}
-                {!isFlorRevealMode && renderSideFanBackCards(leftCards, "left")}
+                {!isTableRevealMode && renderSideFanBackCards(leftCards, "left")}
               </div>
             )}
 
             {isTwoVsTwo && (
               <div className="absolute right-[-46px] top-1/2 z-30 -translate-y-1/2 text-center sm:right-[-70px]">
                 {renderSeatAvatar(rightPlayer, "R", "h-8 w-8 text-xs")}
-                {!isFlorRevealMode && renderSideFanBackCards(rightCards, "right")}
+                {!isTableRevealMode && renderSideFanBackCards(rightCards, "right")}
               </div>
             )}
 
@@ -2603,12 +2983,31 @@ function Mesa({
                   </div>
                   {isTwoVsTwo && (
                     <div className="absolute left-[10%] top-1/2 -translate-y-1/2">
-                      {renderPlayedFan(leftFlorRevealCards, { rotateDeg: 90 })}
+                      {renderSideReveal(leftFlorRevealCards, "left")}
                     </div>
                   )}
                   {isTwoVsTwo && (
                     <div className="absolute right-[10%] top-1/2 -translate-y-1/2">
-                      {renderPlayedFan(rightFlorRevealCards, { rotateDeg: -90 })}
+                      {renderSideReveal(rightFlorRevealCards, "right")}
+                    </div>
+                  )}
+                </>
+              ) : isEnvidoRevealMode ? (
+                <>
+                  <div className="absolute left-1/2 top-[4%] -translate-x-1/2">
+                    {renderPlayedFan(opponentEnvidoRevealCards, { fromNorth: true })}
+                  </div>
+                  <div className="absolute left-1/2 bottom-[4%] -translate-x-1/2">
+                    {renderPlayedFan(myEnvidoRevealCards)}
+                  </div>
+                  {isTwoVsTwo && (
+                    <div className="absolute left-[10%] top-1/2 -translate-y-1/2">
+                      {renderSideReveal(leftEnvidoRevealCards, "left")}
+                    </div>
+                  )}
+                  {isTwoVsTwo && (
+                    <div className="absolute right-[10%] top-1/2 -translate-y-1/2">
+                      {renderSideReveal(rightEnvidoRevealCards, "right")}
                     </div>
                   )}
                 </>
@@ -2627,20 +3026,20 @@ function Mesa({
                   {isTwoVsTwo && (
                     <div className="absolute left-[10%] top-1/2 -translate-y-1/2">
                       {isCanto11DuelDeclaring || isCanto11DuelResolving
-                        ? renderPlayedFan(leftPlayedCards, { rotateDeg: 90 })
+                        ? renderSideFan(leftPlayedCards, "left")
                         : renderPlayedStack(leftPlayedCards, { rotateDeg: 90, stackAxis: "x", stackSign: -1 })}
                     </div>
                   )}
                   {isTwoVsTwo && (
                     <div className="absolute right-[10%] top-1/2 -translate-y-1/2">
                       {isCanto11DuelDeclaring || isCanto11DuelResolving
-                        ? renderPlayedFan(rightPlayedCards, { rotateDeg: -90 })
+                        ? renderSideFan(rightPlayedCards, "right")
                         : renderPlayedStack(rightPlayedCards, { rotateDeg: -90, stackAxis: "x", stackSign: 1 })}
                     </div>
                   )}
 
                   <div className="absolute left-1/2 bottom-[-56px] z-30 -translate-x-1/2 sm:bottom-[-65px]">
-                    {renderFanHand(myCards, {
+                    {!isTableRevealMode && renderFanHand(myCards, {
                       playable: isPardaSelecting
                         ? isMyTurn && !hasSubmittedParda && !hasPendingCall
                         : isMyTurn && !hasPendingCall && !isPardaRevealing,
